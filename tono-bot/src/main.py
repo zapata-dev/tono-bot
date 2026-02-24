@@ -360,7 +360,10 @@ def _extract_referral_data(data: Dict[str, Any]) -> Optional[Dict[str, str]]:
             return referral
 
     # --- Baileys: contextInfo with conversion fields ---
-    ctx_info = msg_obj.get("messageContextInfo") or msg_obj.get("contextInfo") or {}
+    # contextInfo can be at the webhook event level (data["contextInfo"]) or inside
+    # the message object (message["contextInfo"] / message["messageContextInfo"]).
+    # Evolution API (Baileys) places it at the event level alongside "message".
+    ctx_info = data.get("contextInfo") or msg_obj.get("messageContextInfo") or msg_obj.get("contextInfo") or {}
     if not isinstance(ctx_info, dict):
         ctx_info = {}
 
@@ -376,13 +379,39 @@ def _extract_referral_data(data: Dict[str, Any]) -> Optional[Dict[str, str]]:
     entry_app = (ctx_info.get("entryPointConversionApp") or "").strip()
 
     if conversion_source or entry_point:
+        # Determine source_type: check entry_point first, then conversionSource
+        combined = f"{entry_point} {conversion_source}".lower()
+        if "ad" in combined:
+            detected_type = "ad"
+        elif "post" in combined:
+            detected_type = "post"
+        elif entry_point:
+            detected_type = "unknown"
+        else:
+            detected_type = "unknown"
+
         referral = {
-            "source_type": "ad" if "ad" in entry_point.lower() else ("post" if entry_point else "unknown"),
+            "source_type": detected_type,
             "conversion_source": conversion_source,                  # e.g. "FB_Ads"
             "entry_point": entry_point,                              # e.g. "ctwa_ad"
             "entry_app": entry_app,                                  # e.g. "facebook", "instagram"
             "detection_method": "baileys_context_info",
         }
+
+        # Decode conversionData byte array → CTWA click ID string
+        conv_data_raw = ctx_info.get("conversionData")
+        if isinstance(conv_data_raw, dict):
+            try:
+                max_idx = max(int(k) for k in conv_data_raw.keys())
+                ctwa_clid = "".join(chr(int(conv_data_raw[str(i)])) for i in range(max_idx + 1))
+                if ctwa_clid:
+                    referral["ctwa_clid"] = ctwa_clid
+            except (ValueError, KeyError, TypeError):
+                pass
+        elif isinstance(conv_data_raw, (bytes, bytearray)):
+            ctwa_clid = conv_data_raw.decode("utf-8", errors="ignore")
+            if ctwa_clid:
+                referral["ctwa_clid"] = ctwa_clid
 
         # Extract additional Baileys fields if present
         for field in ("conversionDelaySeconds", "ctwaSignals", "ctwaPayload", "externalAdReply"):
@@ -392,7 +421,7 @@ def _extract_referral_data(data: Dict[str, Any]) -> Optional[Dict[str, str]]:
 
         referral = {k: v for k, v in referral.items() if v}
         if referral:
-            logger.info(f"📢 REFERRAL (Baileys): source={conversion_source} entry={entry_point} app={entry_app}")
+            logger.info(f"📢 REFERRAL (Baileys): source={conversion_source} entry={entry_point} app={entry_app} type={detected_type} ctwa={referral.get('ctwa_clid', 'N/A')[:30]}")
             return referral
 
     return None
