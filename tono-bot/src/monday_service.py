@@ -548,8 +548,8 @@ class MondayService:
 
         # --- V2: Source / Referral (Status column - label compuesto) ---
         if self.source_col_id:
-            referral_source = lead_data.get("referral_source") or ""
-            if referral_source and (is_new or referral_source != "Directo"):
+            referral_source = lead_data.get("referral_source") or "Directo"
+            if is_new or referral_source != "Directo":
                 col_vals[self.source_col_id] = {"label": referral_source}
 
         # --- V2.1: Granular Referral Columns ---
@@ -558,13 +558,13 @@ class MondayService:
         # Canal (Status): Facebook / Instagram / Directo
         if self.channel_col_id:
             channel_label = _resolve_channel_label(referral_detail)
-            if channel_label and (is_new or channel_label != "Directo"):
+            if is_new or channel_label != "Directo":
                 col_vals[self.channel_col_id] = {"label": channel_label}
 
         # Tipo Origen (Status): Ad / Post / Directo
         if self.source_type_col_id:
             source_type_label = _resolve_source_type_label(referral_detail)
-            if source_type_label and (is_new or source_type_label != "Directo"):
+            if is_new or source_type_label != "Directo":
                 col_vals[self.source_type_col_id] = {"label": source_type_label}
 
         # Ad ID (Text): Meta Ad ID from source_id
