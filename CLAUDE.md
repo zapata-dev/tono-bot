@@ -126,11 +126,11 @@ The bot automatically tracks leads through a 10-stage sales funnel in Monday.com
 | Origen Lead | Status | `color_mm0wb2gm` | Bot (auto-detected from CTWA/referral) |
 | Canal | Status | `color_mm0wf5zn` | Bot (Facebook/Instagram/Directo) |
 | Tipo Origen | Status | `color_mm0w1mtn` | Bot (Ad/Post/Directo) |
-| Ad ID | Text | `text_mm0wcdmz` | Bot (Meta source_id from referral) |
-| CTWA CLID | Text | `text_mm0wwwg1` | Bot (Click-to-WhatsApp click ID) |
-| Campaign Name | Text | `text_mm0w77pn` | Future (Meta Marketing API batch enrichment) |
-| Ad Set Name | Text | `text_mm0wtebg` | Future (Meta Marketing API batch enrichment) |
-| Ad Name | Text | `text_mm0wtpwb` | Future (Meta Marketing API batch enrichment) |
+| Ad ID | Text | `text_mm0wcdmz` | Bot (Cloud API only: `referral.source_id`; NOT available in Baileys) |
+| CTWA CLID | Text | `text_mm0wwwg1` | Bot (Cloud API: `referral.ctwa_clid`; Baileys: decoded `conversionData`) |
+| Campaign Name | Text | `text_mm0w77pn` | Future (Meta Marketing API batch enrichment from Ad ID) |
+| Ad Set Name | Text | `text_mm0wtebg` | Future (Meta Marketing API batch enrichment from Ad ID) |
+| Ad Name | Text | `text_mm0wtpwb` | Future (Meta Marketing API batch enrichment from Ad ID) |
 
 ### Vehicle Dropdown Labels
 `Tunland E5`, `ESTA 6x4 11.8`, `ESTA 6x4 X13`, `Miler`, `Toano Panel`, `Tunland G7`, `Tunland G9`
@@ -180,11 +180,14 @@ All I/O operations use async/await:
 Automatic detection of leads arriving from Facebook/Instagram ads:
 - **Baileys mode**: Extracts `contextInfo.conversionSource`, `entryPointConversionSource`, `entryPointConversionApp`
 - **Cloud API mode**: Extracts `referral` object with `source_url`, `source_id`, `ctwa_clid`, `headline`, etc.
+- Referral extraction runs **before** the `fromMe` filter (Baileys sends `conversionSource` on outgoing `fromMe=true` messages)
 - Referral data captured on first message and persisted in session context (`referral_source`, `referral_data`)
 - Stored in `GlobalState.pending_referrals` until persisted to SQLite
 - Source label auto-populated in Monday.com "Origen Lead" column
 - Referral details included in Monday.com lead creation notes and owner alerts
 - Known Baileys limitation: `remoteJid` may arrive in `@lid` format (Evolution API issue #2267)
+- Known Baileys limitation: `source_id` (Ad ID) is NOT available — only Cloud API provides it via `referral.source_id`
+- Campaign Name, Ad Set Name, Ad Name require Meta Marketing API batch enrichment (future feature)
 
 ### 5. Human Detection
 Multi-layer heuristics to detect when a human agent takes over:

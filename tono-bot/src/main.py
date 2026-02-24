@@ -1311,6 +1311,15 @@ async def process_single_event(bot_state: GlobalState, data: Dict[str, Any]):
     if msg_id:
         bot_state.processed_message_ids.add(msg_id)
 
+    # === REFERRAL TRACKING (Facebook/Instagram Ads) ===
+    # En Baileys, contextInfo.conversionSource llega en mensajes fromMe=true,
+    # así que extraemos ANTES del filtro fromMe para no perder datos de atribución.
+    if remote_jid not in bot_state.pending_referrals:
+        referral_data = _extract_referral_data(data)
+        if referral_data:
+            bot_state.pending_referrals[remote_jid] = referral_data
+            logger.info(f"📢 Referral capturado para {remote_jid}: {_build_referral_label(referral_data)}")
+
     # === DETECCIÓN DE HANDOFF (MENSAJE SALIENTE) ===
     # Si el mensaje sale del WhatsApp del negocio (from_me=true)
     # y NO fue enviado por el bot → PODRÍA ser un HUMANO ASESOR
@@ -1374,14 +1383,6 @@ async def process_single_event(bot_state: GlobalState, data: Dict[str, Any]):
 
     if not user_message:
         return
-
-    # === REFERRAL TRACKING (Facebook/Instagram Ads) ===
-    # Capturar datos de referral solo en el PRIMER mensaje (cuando no hay referral previo)
-    if remote_jid not in bot_state.pending_referrals:
-        referral_data = _extract_referral_data(data)
-        if referral_data:
-            bot_state.pending_referrals[remote_jid] = referral_data
-            logger.info(f"📢 Referral capturado para {remote_jid}: {_build_referral_label(referral_data)}")
 
     # === ACUMULACIÓN DE MENSAJES RÁPIDOS ===
     # En lugar de procesar inmediatamente, acumulamos y esperamos
