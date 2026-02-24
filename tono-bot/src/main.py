@@ -133,6 +133,9 @@ class GlobalState:
         self.pending_message_tasks: Dict[str, asyncio.Task] = {}  # jid -> task
         self.last_user_message_time: Dict[str, float] = {}  # jid -> timestamp
 
+        # 📢 REFERRAL TRACKING: Datos de origen de Facebook/Instagram ads
+        self.pending_referrals: Dict[str, Dict[str, str]] = {}  # jid -> referral_data
+
 
 # === 3. LIFESPAN (INICIO/CIERRE) ===
 @asynccontextmanager
@@ -321,6 +324,102 @@ def _extract_user_message(msg_obj: Dict[str, Any]) -> Tuple[str, bool, bool]:
     return "", False, False
 
 
+def _extract_referral_data(data: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    """
+    Extrae datos de referral/atribución de anuncios de Facebook (CTWA).
+
+    Soporta dos formatos:
+    1. Baileys (no oficial): contextInfo con conversionSource, entryPointConversionSource, etc.
+    2. Cloud API (oficial): objeto referral con source_url, source_id, ctwa_clid, etc.
+
+    Retorna dict con campos normalizados o None si no hay datos de referral.
+    """
+    if not isinstance(data, dict):
+        return None
+
+    msg_obj = data.get("message", {}) or {}
+    referral: Optional[Dict[str, str]] = None
+
+    # --- Cloud API: referral object at message level or data level ---
+    ref_obj = data.get("referral") or msg_obj.get("referral")
+    if isinstance(ref_obj, dict) and ref_obj:
+        referral = {
+            "source_type": ref_obj.get("source_type", ""),       # "ad" or "post"
+            "source_id": ref_obj.get("source_id", ""),            # Ad ID / Post ID
+            "source_url": ref_obj.get("source_url", ""),          # Facebook URL
+            "headline": ref_obj.get("headline", ""),              # Ad title
+            "body": ref_obj.get("body", ""),                      # Ad description
+            "ctwa_clid": ref_obj.get("ctwa_clid", ""),            # Click-to-WhatsApp Click ID
+            "media_type": ref_obj.get("media_type", ""),          # "image" or "video"
+        }
+        # Clean empty values
+        referral = {k: v for k, v in referral.items() if v}
+        if referral:
+            referral["detection_method"] = "cloud_api_referral"
+            logger.info(f"📢 REFERRAL (Cloud API): type={referral.get('source_type')} id={referral.get('source_id')} ctwa={referral.get('ctwa_clid', 'N/A')}")
+            return referral
+
+    # --- Baileys: contextInfo with conversion fields ---
+    ctx_info = msg_obj.get("messageContextInfo") or msg_obj.get("contextInfo") or {}
+    if not isinstance(ctx_info, dict):
+        ctx_info = {}
+
+    # Also check inside extendedTextMessage.contextInfo
+    if not ctx_info.get("conversionSource"):
+        ext_msg = msg_obj.get("extendedTextMessage", {}) or {}
+        ctx_info_alt = ext_msg.get("contextInfo", {}) or {}
+        if isinstance(ctx_info_alt, dict) and ctx_info_alt.get("conversionSource"):
+            ctx_info = ctx_info_alt
+
+    conversion_source = (ctx_info.get("conversionSource") or "").strip()
+    entry_point = (ctx_info.get("entryPointConversionSource") or "").strip()
+    entry_app = (ctx_info.get("entryPointConversionApp") or "").strip()
+
+    if conversion_source or entry_point:
+        referral = {
+            "source_type": "ad" if "ad" in entry_point.lower() else ("post" if entry_point else "unknown"),
+            "conversion_source": conversion_source,                  # e.g. "FB_Ads"
+            "entry_point": entry_point,                              # e.g. "ctwa_ad"
+            "entry_app": entry_app,                                  # e.g. "facebook", "instagram"
+            "detection_method": "baileys_context_info",
+        }
+
+        # Extract additional Baileys fields if present
+        for field in ("conversionDelaySeconds", "ctwaSignals", "ctwaPayload", "externalAdReply"):
+            val = ctx_info.get(field)
+            if val and val != {}:
+                referral[field] = str(val) if not isinstance(val, str) else val
+
+        referral = {k: v for k, v in referral.items() if v}
+        if referral:
+            logger.info(f"📢 REFERRAL (Baileys): source={conversion_source} entry={entry_point} app={entry_app}")
+            return referral
+
+    return None
+
+
+def _build_referral_label(referral: Dict[str, str]) -> str:
+    """
+    Genera un label legible para el origen del lead.
+    Ej: 'Facebook Ad', 'Facebook Post', 'Instagram Ad', etc.
+    """
+    if not referral:
+        return "Directo"
+
+    app = (referral.get("entry_app") or "").capitalize() or "Facebook"
+    source_type = referral.get("source_type", "unknown")
+
+    if source_type == "ad":
+        return f"{app} Ad"
+    elif source_type == "post":
+        return f"{app} Post"
+    else:
+        conversion = referral.get("conversion_source", "")
+        if "FB_Ads" in conversion or "ad" in conversion.lower():
+            return f"{app} Ad"
+        return f"{app}"
+
+
 async def _ensure_inventory_loaded(bot_state: GlobalState) -> None:
     """
     Compatibilidad con distintas versiones de InventoryService.
@@ -506,6 +605,18 @@ async def _process_accumulated_messages(bot_state: GlobalState, remote_jid: str)
     state = session.get("state", "start")
     context = session.get("context", {}) or {}
 
+    # === REFERRAL: Persistir datos de referral en contexto de sesión ===
+    # Solo se guarda una vez (primer mensaje con datos de referral)
+    if not context.get("referral_source"):
+        pending_ref = bot_state.pending_referrals.pop(remote_jid, None)
+        if pending_ref:
+            context["referral_source"] = _build_referral_label(pending_ref)
+            context["referral_data"] = pending_ref
+            logger.info(f"📢 Referral guardado en contexto: {context['referral_source']}")
+    else:
+        # Clean up pending referral if already persisted
+        bot_state.pending_referrals.pop(remote_jid, None)
+
     # Delay humano
     await human_typing_delay()
 
@@ -585,6 +696,11 @@ async def _process_accumulated_messages(bot_state: GlobalState, remote_jid: str)
             if funnel_key not in bot_state.processed_lead_ids:
                 bot_state.processed_lead_ids.add(funnel_key)
 
+                # Get referral source from context (persisted from first message)
+                result_context = result.get("context", context) or {}
+                referral_source = result_context.get("referral_source") or context.get("referral_source") or ""
+                referral_detail = result_context.get("referral_data") or context.get("referral_data") or {}
+
                 lead_data = {
                     "telefono": remote_jid.split("@")[0],
                     "external_id": f"accumulated_{int(time.time())}",
@@ -592,10 +708,21 @@ async def _process_accumulated_messages(bot_state: GlobalState, remote_jid: str)
                     "interes": funnel_data.get("interes") or "",
                     "cita": funnel_data.get("cita"),
                     "pago": funnel_data.get("pago"),
+                    "referral_source": referral_source,
+                    "referral_data": referral_detail,
                 }
 
+                # Build referral note suffix
+                referral_note = ""
+                if referral_source:
+                    referral_note = f"\n📢 Origen: {referral_source}"
+                    if referral_detail.get("headline"):
+                        referral_note += f" - {referral_detail['headline']}"
+                    if referral_detail.get("source_id"):
+                        referral_note += f" (ID: {referral_detail['source_id']})"
+
                 stage_notes = {
-                    "1er Contacto": f"📩 Primer contacto (turno {funnel_data.get('turn_count', '?')})",
+                    "1er Contacto": f"📩 Primer contacto (turno {funnel_data.get('turn_count', '?')}){referral_note}",
                     "Intención": f"🎯 Interesado en: {funnel_data.get('interes', 'N/A')}",
                     "Cotización": f"📄 Cotización enviada: {funnel_data.get('interes', 'N/A')}",
                     "Cita Programada": f"✅ Cita programada: {funnel_data.get('cita', 'N/A')}",
@@ -615,16 +742,20 @@ async def _process_accumulated_messages(bot_state: GlobalState, remote_jid: str)
             logger.error(f"❌ Error actualizando funnel en Monday: {e}")
 
     # Lead calificado - notificar
+    # Get referral source for alerts
+    result_ctx = result.get("context", context) or {}
+    alert_referral = result_ctx.get("referral_source") or context.get("referral_source") or ""
+
     if lead_info:
         try:
             lead_key = f"{remote_jid}|lead"
             if lead_key not in bot_state.processed_lead_ids:
                 bot_state.processed_lead_ids.add(lead_key)
-                await notify_owner(bot_state, remote_jid, combined_message, reply_text, is_lead=True)
+                await notify_owner(bot_state, remote_jid, combined_message, reply_text, is_lead=True, referral_source=alert_referral)
         except Exception as e:
             logger.error(f"❌ Error procesando LEAD calificado: {e}")
     else:
-        await notify_owner(bot_state, remote_jid, combined_message, reply_text, is_lead=False)
+        await notify_owner(bot_state, remote_jid, combined_message, reply_text, is_lead=False, referral_source=alert_referral)
 
 
 async def _schedule_accumulated_processing(bot_state: GlobalState, remote_jid: str):
@@ -1090,7 +1221,7 @@ async def send_evolution_document(bot_state: GlobalState, number_or_jid: str, te
 
 
 # === 9. ALERTAS AL DUEÑO ===
-async def notify_owner(bot_state: GlobalState, user_number_or_jid: str, user_message: str, bot_reply: str, is_lead: bool = False):
+async def notify_owner(bot_state: GlobalState, user_number_or_jid: str, user_message: str, bot_reply: str, is_lead: bool = False, referral_source: str = ""):
     if not settings.OWNER_PHONE:
         return
 
@@ -1102,6 +1233,8 @@ async def notify_owner(bot_state: GlobalState, user_number_or_jid: str, user_mes
             f"Cliente: wa.me/{clean_client}\n"
             "El bot cerró una cita. Revisa el tablero."
         )
+        if referral_source:
+            alert_text += f"\nOrigen: {referral_source}"
         await send_evolution_message(bot_state, settings.OWNER_PHONE, alert_text)
         return
 
@@ -1120,6 +1253,8 @@ async def notify_owner(bot_state: GlobalState, user_number_or_jid: str, user_mes
         f"Dijo: \"{user_message}\"\n"
         f"Bot: \"{(bot_reply or '')[:60]}...\""
     )
+    if referral_source:
+        alert_text += f"\nOrigen: {referral_source}"
     await send_evolution_message(bot_state, settings.OWNER_PHONE, alert_text)
 
 
@@ -1210,6 +1345,14 @@ async def process_single_event(bot_state: GlobalState, data: Dict[str, Any]):
 
     if not user_message:
         return
+
+    # === REFERRAL TRACKING (Facebook/Instagram Ads) ===
+    # Capturar datos de referral solo en el PRIMER mensaje (cuando no hay referral previo)
+    if remote_jid not in bot_state.pending_referrals:
+        referral_data = _extract_referral_data(data)
+        if referral_data:
+            bot_state.pending_referrals[remote_jid] = referral_data
+            logger.info(f"📢 Referral capturado para {remote_jid}: {_build_referral_label(referral_data)}")
 
     # === ACUMULACIÓN DE MENSAJES RÁPIDOS ===
     # En lugar de procesar inmediatamente, acumulamos y esperamos
