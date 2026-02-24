@@ -45,6 +45,55 @@ VEHICLE_DROPDOWN_MAP = {
 }
 
 
+# ============================================================
+# V2.1: REFERRAL → Granular Monday column helpers
+# ============================================================
+def _resolve_channel_label(referral_data: dict) -> str:
+    """
+    Deriva el label de Canal para Monday desde referral data.
+    Retorna: 'Facebook', 'Instagram', 'Directo'
+    """
+    if not referral_data:
+        return "Directo"
+
+    entry_app = (referral_data.get("entry_app") or "").lower()
+    source_url = (referral_data.get("source_url") or "").lower()
+    conversion_source = (referral_data.get("conversion_source") or "").lower()
+
+    if "instagram" in entry_app or "instagram" in source_url:
+        return "Instagram"
+    if "facebook" in entry_app or "fb" in entry_app or "facebook" in source_url or "fb.com" in source_url:
+        return "Facebook"
+    if "fb" in conversion_source:
+        return "Facebook"
+
+    return "Facebook"
+
+
+def _resolve_source_type_label(referral_data: dict) -> str:
+    """
+    Deriva el label de Tipo Origen para Monday desde referral data.
+    Retorna: 'Ad', 'Post', 'Directo'
+    """
+    if not referral_data:
+        return "Directo"
+
+    source_type = (referral_data.get("source_type") or "").lower()
+    if source_type == "ad":
+        return "Ad"
+    if source_type == "post":
+        return "Post"
+
+    entry_point = (referral_data.get("entry_point") or "").lower()
+    conversion_source = (referral_data.get("conversion_source") or "").lower()
+    if "ad" in entry_point or "ad" in conversion_source:
+        return "Ad"
+    if "post" in entry_point:
+        return "Post"
+
+    return "Directo"
+
+
 def _get_current_month_group_name() -> str:
     """Retorna el nombre del grupo del mes actual: 'FEBRERO 2026'"""
     try:
@@ -262,6 +311,15 @@ class MondayService:
         # --- V2 Referral Tracking ---
         self.source_col_id = os.getenv("MONDAY_SOURCE_COLUMN_ID")
 
+        # --- V2.1 Granular Referral Columns ---
+        self.channel_col_id = os.getenv("MONDAY_CHANNEL_COLUMN_ID")
+        self.source_type_col_id = os.getenv("MONDAY_SOURCE_TYPE_COLUMN_ID")
+        self.ad_id_col_id = os.getenv("MONDAY_AD_ID_COLUMN_ID")
+        self.ctwa_clid_col_id = os.getenv("MONDAY_CTWA_CLID_COLUMN_ID")
+        self.campaign_name_col_id = os.getenv("MONDAY_CAMPAIGN_NAME_COLUMN_ID")
+        self.adset_name_col_id = os.getenv("MONDAY_ADSET_NAME_COLUMN_ID")
+        self.ad_name_col_id = os.getenv("MONDAY_AD_NAME_COLUMN_ID")
+
         # Log config
         if self.stage_col_id:
             logger.info(f"✅ Monday Stage Column: {self.stage_col_id}")
@@ -274,6 +332,13 @@ class MondayService:
             "appointment": self.appointment_col_id,
             "appointment_time": self.appointment_time_col_id,
             "source": self.source_col_id,
+            "channel": self.channel_col_id,
+            "source_type": self.source_type_col_id,
+            "ad_id": self.ad_id_col_id,
+            "ctwa_clid": self.ctwa_clid_col_id,
+            "campaign_name": self.campaign_name_col_id,
+            "adset_name": self.adset_name_col_id,
+            "ad_name": self.ad_name_col_id,
         }
         configured = {k: v for k, v in v2_cols.items() if v}
         if configured:
@@ -481,11 +546,56 @@ class MondayService:
                     except (ValueError, IndexError) as e:
                         logger.warning(f"⚠️ No se pudo parsear hora de cita: {appointment_iso.get('time')} - {e}")
 
-        # --- V2: Source / Referral (Status column) ---
+        # --- V2: Source / Referral (Status column - label compuesto) ---
         if self.source_col_id:
             referral_source = lead_data.get("referral_source") or ""
             if referral_source and (is_new or referral_source != "Directo"):
                 col_vals[self.source_col_id] = {"label": referral_source}
+
+        # --- V2.1: Granular Referral Columns ---
+        referral_detail = lead_data.get("referral_data") or {}
+
+        # Canal (Status): Facebook / Instagram / Directo
+        if self.channel_col_id:
+            channel_label = _resolve_channel_label(referral_detail)
+            if channel_label and (is_new or channel_label != "Directo"):
+                col_vals[self.channel_col_id] = {"label": channel_label}
+
+        # Tipo Origen (Status): Ad / Post / Directo
+        if self.source_type_col_id:
+            source_type_label = _resolve_source_type_label(referral_detail)
+            if source_type_label and (is_new or source_type_label != "Directo"):
+                col_vals[self.source_type_col_id] = {"label": source_type_label}
+
+        # Ad ID (Text): Meta Ad ID from source_id
+        if self.ad_id_col_id:
+            ad_id = (referral_detail.get("source_id") or "").strip()
+            if ad_id:
+                col_vals[self.ad_id_col_id] = ad_id
+
+        # CTWA CLID (Text): Click-to-WhatsApp click ID
+        if self.ctwa_clid_col_id:
+            ctwa_clid = (referral_detail.get("ctwa_clid") or "").strip()
+            if ctwa_clid:
+                col_vals[self.ctwa_clid_col_id] = ctwa_clid
+
+        # Campaign Name (Text): future Meta Marketing API enrichment
+        if self.campaign_name_col_id:
+            campaign_name = (referral_detail.get("campaign_name") or "").strip()
+            if campaign_name:
+                col_vals[self.campaign_name_col_id] = campaign_name
+
+        # Ad Set Name (Text): future Meta Marketing API enrichment
+        if self.adset_name_col_id:
+            adset_name = (referral_detail.get("adset_name") or "").strip()
+            if adset_name:
+                col_vals[self.adset_name_col_id] = adset_name
+
+        # Ad Name (Text): future Meta Marketing API enrichment
+        if self.ad_name_col_id:
+            ad_name = (referral_detail.get("ad_name") or "").strip()
+            if ad_name:
+                col_vals[self.ad_name_col_id] = ad_name
 
         return col_vals
 
