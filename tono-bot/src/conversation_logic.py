@@ -106,6 +106,24 @@ REGLAS OBLIGATORIAS:
 - Si el cliente pregunta por un vehículo: búscalo en INVENTARIO DISPONIBLE. Si está ahí → "Sí lo manejamos." Si no está → "Por el momento no tenemos esa unidad, pero tenemos otras opciones."
 - SIEMPRE ofrece lo que SÍ está en inventario cuando el cliente pregunta por algo que no tenemos.
 
+0.5) INTERPRETACIÓN COMERCIAL — CARGA vs. PASAJEROS (CRÍTICO):
+- Cuando el cliente pregunte por "asientos", "pasajeros", "cuántos caben", "de cuántos es", "bancas", "filas de asientos", "para personal", "transporte de personal" o "es panel o van":
+  → ESTÁ PREGUNTANDO si la unidad es versión de PASAJEROS o de CARGA. NO pregunta si existen asientos físicos en la cabina (eso es obvio, toda unidad tiene asientos de cabina).
+- AL PRESENTAR UNA UNIDAD POR PRIMERA VEZ, SIEMPRE indica su tipo de uso:
+  CORRECTO: "La FOTON TOANO PANEL 2025 es una van de CARGA, cuenta con 3 asientos en cabina."
+  INCORRECTO: "La FOTON TOANO PANEL 2025 tiene 3 asientos." (no aclara que es de carga, induce confusión)
+- SI LA UNIDAD ES DE CARGA (Panel, Chasis, Tractocamión) y el cliente pregunta por asientos/pasajeros:
+  1. Aclara inmediatamente: "La [MODELO] es versión de carga. Cuenta con [X] asientos en cabina (conductor + acompañantes), pero la zona trasera es exclusivamente para carga."
+  2. Pregunta: "¿Estás buscando una unidad para transporte de pasajeros?"
+  3. Si hay versiones de pasajeros en el INVENTARIO, menciónalas. Si no hay: "Por el momento no tenemos versión de pasajeros disponible, pero te puedo mostrar nuestras opciones de carga."
+- SI HAY AMBIGÜEDAD (ej: el cliente dice "la Toano" y existen versión carga Y pasajeros en inventario): Pregunta primero "¿Buscas la versión de carga o la de pasajeros?"
+- TABLA DE INTERPRETACIÓN:
+  * "¿Tiene asientos?" → ¿Es versión de pasajeros?
+  * "¿De cuántos pasajeros es?" → ¿Cuánta gente puedo transportar atrás?
+  * "¿Es panel?" → ¿Es versión cerrada de carga sin ventanas atrás?
+  * "¿Cuántos caben?" → ¿Cuántas personas puede transportar?
+  * "¿Tiene banca atrás?" → ¿Tiene asientos traseros para pasajeros?
+
 1) IDENTIDAD:
 - Si preguntan "¿con quién hablo?" o "¿quién eres?": PRIMERO di "Soy Adrian Jimenez, asesor de Tractos y Max."
 - NUNCA pidas el nombre del cliente ANTES de dar el tuyo.
@@ -236,6 +254,8 @@ REGLAS OBLIGATORIAS:
 - Formato markdown para links (NO uses [texto](url), WhatsApp no lo soporta)
 - Repetir la misma ubicación o link de Maps si ya lo diste antes (revisa HISTORIAL)
 - Inventar ubicaciones que no estén en el INVENTARIO; solo usa lo que dice el inventario o Tlalnepantla como default
+- Decir que una unidad de CARGA "tiene asientos" sin aclarar que son solo de cabina y que la zona trasera es de carga (ver regla 0.5)
+- Presentar una unidad sin mencionar si es de CARGA o PASAJEROS en la primera mención
 
 16) NOMBRE OBLIGATORIO ANTES DE COTIZACIÓN O CITA:
 - ANTES de dar precio, cotización, corrida financiera o agendar cita, NECESITAS el nombre del cliente.
@@ -592,13 +612,27 @@ def _build_inventory_text(inventory_service) -> str:
         if colores:
             info += f" | Colores: {colores}"
 
+        # Tipo de uso: CARGA vs PASAJEROS (inferido del modelo)
+        modelo_lower = modelo.lower()
+        tipo_uso = _safe_get(item, ["TipoUso", "tipo_uso", "tipouso"])
+        if not tipo_uso:
+            if any(kw in modelo_lower for kw in ("panel", "chasis", "volteo", "revolvedora")):
+                tipo_uso = "CARGA"
+            elif any(kw in modelo_lower for kw in ("pasajero", "bus", "escolar")):
+                tipo_uso = "PASAJEROS"
+            elif any(kw in modelo_lower for kw in ("esta", "miler")):
+                tipo_uso = "CARGA"
+        if tipo_uso:
+            info += f" | Uso: {tipo_uso}"
+
         # Tipo de cabina y asientos (desde CSV)
         tipo_cabina = _safe_get(item, ["TipoCabina", "tipocabina", "tipo_cabina"])
         asientos = _safe_get(item, ["Asientos", "asientos"])
         if tipo_cabina:
             cab_info = tipo_cabina
             if asientos:
-                cab_info += f", {asientos} asientos"
+                cab_qualifier = " en cabina" if tipo_uso == "CARGA" else ""
+                cab_info += f", {asientos} asientos{cab_qualifier}"
             info += f" | {cab_info}"
 
         # Specs opcionales (solo si el CSV/Sheet tiene datos)
@@ -682,6 +716,29 @@ def _build_focused_inventory_text(inventory_service, last_interest: str) -> str:
             price_str = _format_price(precio, moneda, iva)
             label = f"{marca} {modelo}".strip() if marca else modelo
             info = f"Modelo de interés: {label} {anio}: {price_str}"
+
+            # Tipo de uso: CARGA vs PASAJEROS
+            modelo_lower = modelo.lower()
+            tipo_uso = _safe_get(item, ["TipoUso", "tipo_uso", "tipouso"])
+            if not tipo_uso:
+                if any(kw in modelo_lower for kw in ("panel", "chasis", "volteo", "revolvedora")):
+                    tipo_uso = "CARGA"
+                elif any(kw in modelo_lower for kw in ("pasajero", "bus", "escolar")):
+                    tipo_uso = "PASAJEROS"
+                elif any(kw in modelo_lower for kw in ("esta", "miler")):
+                    tipo_uso = "CARGA"
+            if tipo_uso:
+                info += f" | Uso: {tipo_uso}"
+
+            # Tipo de cabina y asientos
+            tipo_cabina = _safe_get(item, ["TipoCabina", "tipocabina", "tipo_cabina"])
+            asientos = _safe_get(item, ["Asientos", "asientos"])
+            if tipo_cabina:
+                cab_info = tipo_cabina
+                if asientos:
+                    cab_qualifier = " en cabina" if tipo_uso == "CARGA" else ""
+                    cab_info += f", {asientos} asientos{cab_qualifier}"
+                info += f" | {cab_info}"
 
             # Specs adicionales para modelo enfocado
             specs = []
