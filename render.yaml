@@ -1,0 +1,128 @@
+# ============================================================
+# render.yaml — Tono-Bot Blueprint (Render IaC)
+# ============================================================
+# Para migrar a una nueva cuenta de Render:
+#   1. Conecta el repo de GitHub en la nueva cuenta
+#   2. Usa "New > Blueprint" y apunta a este archivo
+#   3. Render creará el servicio automáticamente
+#   4. Configura las variables de entorno marcadas como "sync: false"
+#      (secretos) en el dashboard de Render
+#   5. Agrega un Persistent Disk en el dashboard:
+#      - Name: tono-bot-db
+#      - Mount Path: /app/tono-bot/db
+#      - Size: 1 GB
+#   6. Actualiza la webhook URL en Evolution API al nuevo dominio
+# ============================================================
+
+services:
+  - type: web
+    name: tono-bot
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: ./tono-bot
+    repo: https://github.com/dgarduno-ZAPATA/tono-bot
+    branch: main
+    region: oregon
+
+    # Health check
+    healthCheckPath: /
+
+    # Persistent disk para SQLite (agregar manualmente si Blueprint no lo soporta)
+    disk:
+      name: tono-bot-db
+      mountPath: /app/tono-bot/db
+      sizeGB: 1
+
+    # --- Variables de entorno ---
+    envVars:
+      # ===== OBLIGATORIAS (configurar en dashboard) =====
+      - key: EVOLUTION_API_URL
+        sync: false  # Configurar manualmente en dashboard
+      - key: EVOLUTION_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+
+      # ===== LLM =====
+      - key: LLM_PRIMARY
+        value: gemini
+      - key: OPENAI_MODEL
+        value: gemini-2.5-flash-lite
+      - key: OPENAI_FALLBACK_MODEL
+        value: gpt-4o-mini
+
+      # ===== EVOLUTION API =====
+      - key: EVO_INSTANCE
+        value: "Maximo Cervantes 2"
+
+      # ===== INVENTARIO =====
+      - key: SHEET_CSV_URL
+        sync: false  # URL de Google Sheets (configurar en dashboard)
+      - key: INVENTORY_REFRESH_SECONDS
+        value: "300"
+
+      # ===== SQLITE =====
+      - key: SQLITE_PATH
+        value: /app/tono-bot/db/memory.db
+
+      # ===== OWNER / EQUIPO =====
+      - key: OWNER_PHONE
+        sync: false
+      - key: TEAM_NUMBERS
+        sync: false
+
+      # ===== HANDOFF / ACUMULACION =====
+      - key: AUTO_REACTIVATE_MINUTES
+        value: "60"
+      - key: HUMAN_DETECTION_WINDOW_SECONDS
+        value: "3"
+      - key: MESSAGE_ACCUMULATION_SECONDS
+        value: "4.0"
+
+      # ===== LOGGING =====
+      - key: LOG_WEBHOOK_PAYLOAD
+        value: "True"
+      - key: LOG_WEBHOOK_PAYLOAD_MAX_CHARS
+        value: "6000"
+
+      # ===== MONDAY.COM CRM =====
+      - key: MONDAY_API_KEY
+        sync: false
+      - key: MONDAY_BOARD_ID
+        sync: false
+      - key: MONDAY_DEDUPE_COLUMN_ID
+        value: text_mkzw7xjz
+      - key: MONDAY_LAST_MSG_ID_COLUMN_ID
+        value: text_mkzwndf
+      - key: MONDAY_PHONE_COLUMN_ID
+        value: phone_mkzwh34a
+      - key: MONDAY_STAGE_COLUMN_ID
+        value: status
+      - key: MONDAY_VEHICLE_COLUMN_ID
+        value: dropdown_mm0gq48r
+      - key: MONDAY_PAYMENT_COLUMN_ID
+        value: color_mm0gbjea
+      - key: MONDAY_APPOINTMENT_COLUMN_ID
+        value: date_mm0grgky
+      - key: MONDAY_APPOINTMENT_TIME_COLUMN_ID
+        value: hour_mm0hfk47
+      - key: MONDAY_CMV_COLUMN_ID
+        value: boolean_mm0g2zf3
+      - key: MONDAY_SOURCE_COLUMN_ID
+        value: color_mm0wb2gm
+      - key: MONDAY_CHANNEL_COLUMN_ID
+        value: color_mm0wf5zn
+      - key: MONDAY_SOURCE_TYPE_COLUMN_ID
+        value: color_mm0w1mtn
+      - key: MONDAY_AD_ID_COLUMN_ID
+        value: text_mm0wcdmz
+      - key: MONDAY_CTWA_CLID_COLUMN_ID
+        value: text_mm0wwwg1
+      - key: MONDAY_CAMPAIGN_NAME_COLUMN_ID
+        value: text_mm0w77pn
+      - key: MONDAY_ADSET_NAME_COLUMN_ID
+        value: text_mm0wtebg
+      - key: MONDAY_AD_NAME_COLUMN_ID
+        value: text_mm0wtpwb
