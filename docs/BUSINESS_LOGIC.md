@@ -1,188 +1,215 @@
-# Lógica de Negocio y Reglas de Automatización
-# Asistente Virtual — Tractos y Max
+# LÓGICA DE NEGOCIO, FLUJOS Y REGLAS DE ESTADO
+# Tono-Bot / "Adrian Jimenez" – Tractos y Max
+# Documento técnico-operativo de arquitectura funcional y operación comercial
 
-Documento operativo que describe cómo funciona el asistente virtual de WhatsApp y cómo se refleja toda su actividad en el tablero de Monday.com. Dirigido a equipos de ventas, gerencia y dirección.
+Este documento unifica y consolida la lógica de negocio, reglas de estado, validaciones y flujos transaccionales del asistente virtual de WhatsApp (en adelante "el bot"), diseñado para gestionar conversaciones con clientes potenciales, detectar intención comercial, responder solicitudes de información, enviar documentación (PDF), compartir fotos del inventario, gestionar citas y automatizar la progresión de leads dentro del embudo comercial conectado a Monday.com, manteniendo control estricto sobre calidad de datos y evitando interpretaciones erróneas o información inventada.
+
+────────────────────────────────────────────────────────────
+## 1) PROPÓSITO Y FILOSOFÍA OPERATIVA
+────────────────────────────────────────────────────────────
+
+### 1.1 Objetivo principal
+El bot opera 24/7 y su objetivo principal es **destrabar**: resolver dudas, compartir información y eliminar fricciones para que el cliente visite la agencia.
+
+### 1.2 Enfoque comercial (no agresivo)
+El bot NO actúa como vendedor insistente. Responde en función de lo que el cliente pregunta, ofrece información útil (fichas, simulaciones, fotos), y cuando detecta señales suficientes, propone o confirma cita. Cuando es necesario, deriva a un asesor humano.
+
+### 1.3 Principio de trazabilidad total
+Toda acción relevante del bot queda reflejada automáticamente en Monday.com (campos del lead y notas de historial), sin intervención manual, para que ventas y dirección tengan visibilidad completa.
+
+────────────────────────────────────────────────────────────
+## 2) ARQUITECTURA DE DATOS EN MONDAY.COM
+────────────────────────────────────────────────────────────
+
+### 2.1 Tablero
+Nombre del tablero: **"Leads Tractos y Max"**
+
+### 2.2 Organización automática por mes
+Los leads se agrupan por el mes en que llegan. Se crea dinámicamente el grupo mensual correspondiente (por ejemplo: "FEBRERO 2026", "MARZO 2026", "ABRIL 2026").
+
+### 2.3 Campos típicos del registro (columna y función)
+A continuación se describe qué se registra, quién lo registra y cuándo ocurre:
+
+**Identidad del lead**
+- **Nombre del ítem:** Nombre del cliente + teléfono (ejemplo "Juan Pérez | 5551234567"). Se actualiza cuando el bot detecta y valida el nombre real.
+- **Teléfono:** Número de WhatsApp del cliente. Se captura desde el primer contacto.
+
+**Estado del embudo (Embudo comercial)**
+- **Estado:** Etapa del lead. El bot mueve etapas 1 a 5; el equipo mueve etapas 6 a 10.
+
+**Interés**
+- **Vehículo de Interés:** Modelo detectado y normalizado. Se llena al detectar mención explícita o implícita del modelo.
+
+**Pago**
+- **Esquema de Pago:** "De Contado", "Financiamiento" o "Por definir". Se llena cuando el cliente expresa intención de pago o se infiere que aún no lo mencionó.
+
+**Cita**
+- **Agenda Citas (Día):** Fecha de la cita. Se llena cuando el cliente confirma.
+- **Hora Cita:** Hora de la cita. Se llena cuando el cliente confirma.
+
+**Confirmación interna**
+- **Confirmación CMV** (checkbox): Solo lo marca el equipo, el bot nunca lo modifica.
+
+**Atribución (Referral Tracking / Meta)**
+- **Origen Lead:** Ejemplo "Facebook Ad", "Instagram Post", "Directo".
+- **Canal:** "Facebook", "Instagram", "Directo".
+- **Tipo de Origen:** "Ad", "Post", "Directo".
+- **Ad ID:** Identificador del anuncio (cuando está disponible).
+- **CTWA Click ID:** Identificador del clic.
+
+**Campos futuros** (pendientes de enriquecimiento):
+- Campaign Name, Ad Set Name, Ad Name.
+
+### 2.4 Notas del ítem (historial)
+Cada evento importante (primer contacto, interés detectado, cotización enviada, cita programada, desinterés, etc.) genera una nota con detalles. Esto sirve como "bitácora" sin salir del tablero.
+
+────────────────────────────────────────────────────────────
+## 3) EMBUDO COMERCIAL Y REGLAS DE PROGRESIÓN (FUNNEL V2)
+────────────────────────────────────────────────────────────
+
+### 3.1 Jerarquía del embudo (10 etapas)
+
+**Etapas automáticas (bot):**
+1. 1er Contacto
+2. Intención
+3. Cotización
+4. Cita Programada
+5. Sin Interés
+
+**Etapas manuales (equipo):**
+6. Cita Atendida
+7. Cita No Atendida
+8. Venta Cerrada
+9. Financiamiento en Gestión
+10. Venta Caída
+
+### 3.2 Regla de oro: solo avance
+Un lead **nunca retrocede** de estado. La jerarquía se valida mediante una estructura de control (conceptualmente STAGE_HIERARCHY). Ejemplo: si ya está en "Cotización", no puede volver a "Intención".
+
+### 3.3 Override global: Sin Interés
+"Sin Interés" puede activarse en cualquier momento si el cliente expresa rechazo explícito (STOP/BAJA/cancela/no me interesa). En cuanto se detecta, el lead se marca como terminal.
+
+### 3.4 Estados terminales y reinicio de ciclo
+
+**Estados terminales:**
+- Venta Cerrada
+- Venta Caída
+- Sin Interés
+
+Cuando el lead está en estado terminal, si ese mismo cliente vuelve a escribir, el bot **NO actualiza el registro cerrado**. En su lugar crea un **nuevo registro** (nuevo ítem) para iniciar un ciclo fresco.
+
+────────────────────────────────────────────────────────────
+## 4) ACCIONES TRANSACCIONALES EN TIEMPO REAL (DURANTE LA CONVERSACIÓN)
+────────────────────────────────────────────────────────────
+
+### 4.1 Creación de Lead en Monday.com
+
+**Evento disparador:**
+- Primer mensaje recibido del cliente por WhatsApp.
+
+**Condiciones necesarias (filtros de seguridad):**
+- Identificador remoteJid válido.
+- El mensaje no proviene de un grupo.
+- El mensaje no es broadcast.
+
+**Acción ejecutada:**
+- Se crea un nuevo ítem en Monday.com.
+- Se asigna automáticamente el estado "1er Contacto".
+- Se coloca el registro dentro del grupo mensual dinámico correspondiente.
+- Se almacenan variables de atribución de origen si vienen en el primer mensaje (Referral Tracking).
+- Se registra el teléfono desde el primer contacto.
+
+**Protección contra duplicados:**
+- Antes de crear, el bot busca si el teléfono ya existe en el tablero.
+- Si existe y NO está en estado terminal, actualiza el mismo ítem (no crea duplicado).
+- Solo crea un nuevo ítem si el registro anterior está en estado terminal.
 
 ---
 
-## 1. Introducción
+### 4.2 Detección de intención de compra (interés por modelo)
 
-El asistente virtual ("Adrian Jimenez") atiende clientes por WhatsApp las 24 horas. Su objetivo principal es **destrabar**: resolver dudas, compartir información y eliminar barreras para que el cliente visite la agencia.
+**Evento disparador:**
+- El cliente menciona un modelo específico o hace referencia clara al inventario ("la G9", "la van", "el tracto", etc.).
 
-**No es un bot de ventas agresivo.** Responde lo que el cliente pregunta, ofrece fichas técnicas, simulaciones de financiamiento y fotos del inventario. Cuando el cliente está listo, agenda la cita y registra todo automáticamente en Monday.com.
+**Condiciones necesarias:**
+- Variable de interés detectada (conceptualmente last_interest).
+- Score de coincidencia igual o mayor a 2 entre tokens del mensaje y el inventario activo.
+- El sistema aplica normalización (mapeo de sinónimos / errores comunes).
 
-Todo lo que el bot hace durante la conversación queda reflejado en el tablero de Monday, sin intervención manual del equipo.
+**Acción ejecutada:**
+- El lead avanza a estado "Intención".
+- Se actualiza "Vehículo de Interés".
+- Se normaliza el nombre del modelo usando un mapa de equivalencias (conceptualmente VEHICLE_DROPDOWN_MAP).
 
----
-
-## 2. El Tablero en Monday.com — Vista General
-
-**Tablero:** "Leads Tractos y Max"
-
-### Organización por mes
-Los leads se agrupan automáticamente por el mes en que llegaron. Cada mes se crea un grupo nuevo (ej. "MARZO 2026", "ABRIL 2026"). Esto permite filtrar y analizar el pipeline por periodo.
-
-### Columnas del tablero
-
-| Columna | Qué contiene | Quién la llena | Cuándo se llena |
-|---------|-------------|----------------|-----------------|
-| **Nombre del ítem** | Nombre del cliente + teléfono (ej. "Juan Pérez \| 5551234567") | Bot | Al detectar el nombre en la conversación |
-| **Estado** (Embudo) | Etapa actual del lead en el embudo de ventas | Bot (etapas 1-5) / Equipo (etapas 6-10) | Se actualiza conforme avanza la conversación |
-| **Teléfono** | Número de WhatsApp del cliente | Bot | Al primer contacto |
-| **Vehículo de Interés** | Modelo que el cliente mencionó (ej. "Tunland G9") | Bot | Cuando el cliente pregunta por un modelo específico |
-| **Esquema de Pago** | "De Contado", "Financiamiento" o "Por definir" | Bot | Cuando el cliente menciona cómo quiere pagar |
-| **Agenda Citas (Día)** | Fecha de la cita programada | Bot | Cuando se confirma la cita |
-| **Hora Cita** | Hora de la cita programada | Bot | Cuando se confirma la cita con horario |
-| **Confirmación CMV** | Checkbox de confirmación interna | Equipo (manual) | Cuando el equipo lo valida internamente |
-| **Origen Lead** | De dónde vino el cliente (ej. "Facebook Ad", "Instagram Post", "Directo") | Bot | Al primer mensaje, si viene de un anuncio |
-| **Canal** | Red social de origen ("Facebook", "Instagram" o "Directo") | Bot | Al primer mensaje |
-| **Tipo Origen** | Tipo de publicación ("Ad", "Post" o "Directo") | Bot | Al primer mensaje |
-| **Ad ID** | Identificador del anuncio de Meta | Bot | Al primer mensaje (solo disponible con Cloud API) |
-| **CTWA Click ID** | Identificador del clic en el anuncio | Bot | Al primer mensaje |
-| **Campaign Name** | Nombre de la campaña en Meta Ads | Pendiente (enriquecimiento futuro) | — |
-| **Ad Set Name** | Nombre del conjunto de anuncios | Pendiente (enriquecimiento futuro) | — |
-| **Ad Name** | Nombre del anuncio específico | Pendiente (enriquecimiento futuro) | — |
-
-### Notas del ítem
-Cada vez que ocurre un evento importante, el bot agrega una nota al ítem en Monday con los detalles. Esto permite ver el historial completo de interacciones sin salir del tablero.
-
----
-
-## 3. Embudo de Ventas — Cómo Avanza un Lead
-
-El embudo tiene 10 etapas. Las primeras 5 las mueve el bot automáticamente. Las últimas 5 las mueve el equipo de ventas.
-
-| # | Etapa | Quién la mueve | Qué significa |
-|---|-------|---------------|---------------|
-| 1 | **1er Contacto** | Bot | El cliente envió su primer mensaje. Se registró en Monday. |
-| 2 | **Intención** | Bot | El cliente preguntó por un modelo específico (ej. "¿Cuánto cuesta la Tunland G9?"). |
-| 3 | **Cotización** | Bot | El bot envió una ficha técnica o simulación de financiamiento en PDF. |
-| 4 | **Cita Programada** | Bot | El cliente confirmó día, hora y nombre para visitar la agencia. |
-| 5 | **Sin Interés** | Bot | El cliente expresó que no le interesa (ej. "No gracias", "Ya no quiero", "STOP"). |
-| 6 | **Cita Atendida** | Equipo | El cliente llegó a la cita. |
-| 7 | **Cita No Atendida** | Equipo | El cliente no se presentó. |
-| 8 | **Venta Cerrada** | Equipo | Se concretó la venta. |
-| 9 | **Financiamiento en Gestión** | Equipo | El trámite de crédito está en proceso. |
-| 10 | **Venta Caída** | Equipo | La venta no se concretó. |
-
-### Reglas del embudo
-
-**Solo avanza, nunca retrocede.**
-Un lead que ya está en "Cotización" no puede regresar a "Intención". Esto mantiene limpio el pipeline y refleja siempre el punto más avanzado de la relación con el cliente.
-
-**Excepción: "Sin Interés" puede activarse en cualquier momento.**
-Si el cliente dice explícitamente que no le interesa, se marca como "Sin Interés" sin importar en qué etapa estuviera.
-
-**Estados terminales y nuevos ciclos.**
-Cuando un lead llega a "Venta Cerrada", "Venta Caída" o "Sin Interés", se considera cerrado. Si ese mismo cliente vuelve a escribir después, el bot crea un **nuevo registro** en Monday (un nuevo ítem) para iniciar un ciclo de venta fresco, sin modificar el registro anterior.
-
-### Ejemplo: Recorrido completo de un lead
-
-> **Lunes 10:00 AM** — El cliente escribe "Hola, buenas tardes" por WhatsApp.
-> - En Monday aparece un nuevo ítem: "Cliente Nuevo | 5551234567"
-> - Estado: **1er Contacto**
-> - Nota: "Primer contacto"
-> - Si vino de un anuncio de Facebook, las columnas Origen, Canal y Tipo se llenan automáticamente.
->
-> **Lunes 10:02 AM** — El cliente pregunta: "¿Cuánto cuesta la Tunland G9?"
-> - Estado avanza a: **Intención**
-> - Columna "Vehículo de Interés" se llena con: **Tunland G9**
-> - Nota: "Interesado en: Tunland G9"
->
-> **Lunes 10:05 AM** — El cliente pide: "¿Me mandas la ficha técnica?"
-> - El bot envía el PDF por WhatsApp.
-> - Estado avanza a: **Cotización**
-> - Nota: "Cotización enviada: Tunland G9"
->
-> **Lunes 10:08 AM** — El cliente dice: "Me gustaría ir el miércoles a las 10"
-> - El bot pregunta: "Perfecto, ¿a nombre de quién agendo la cita?"
-> - El cliente responde: "Juan Pérez"
-> - Estado avanza a: **Cita Programada**
-> - Nombre del ítem cambia a: "Juan Pérez | 5551234567"
-> - Columna "Agenda Citas" se llena con: **miércoles (fecha ISO)**
-> - Columna "Hora Cita" se llena con: **10:00**
-> - Nota: "Cita programada: Miércoles 10:00"
-> - El responsable recibe una alerta por WhatsApp con los datos del lead.
-
----
-
-## 4. Acciones Automáticas del Bot (Reflejadas en Monday)
-
-### 4.1 Registro inicial del lead
-
-**Qué lo dispara:** El cliente envía su primer mensaje por WhatsApp.
-
-**Qué aparece en Monday:**
-- Se crea un nuevo ítem en el grupo del mes actual.
-- Estado: "1er Contacto".
-- El teléfono se registra automáticamente.
-- Si el cliente llegó desde un anuncio de Facebook o Instagram, se llenan las columnas de atribución (Origen, Canal, Tipo, Ad ID, Click ID).
-
-**Protección contra duplicados:** Si el mismo teléfono ya existe en el tablero, el bot actualiza el registro existente en lugar de crear uno nuevo. Solo crea uno nuevo si el registro anterior está en un estado terminal (Venta Cerrada, Venta Caída o Sin Interés).
-
----
-
-### 4.2 Detección de vehículo de interés
-
-**Qué lo dispara:** El cliente menciona un modelo del inventario durante la conversación.
-
-**Qué aparece en Monday:**
-- Estado avanza a "Intención".
-- La columna "Vehículo de Interés" se llena con el modelo detectado.
-- Nota agregada con el vehículo identificado.
-
-**El bot reconoce variaciones y errores comunes:**
+**Reconocimiento de variaciones y errores comunes (ejemplos):**
 
 | El cliente escribe... | El bot entiende... |
 |----------------------|-------------------|
 | "la G9" | Tunland G9 |
-| "la pickup" / "la troca" | Tunland (cualquier variante) |
+| "la pickup" / "la troca" | Tunland (variante según disponibilidad) |
 | "la van" / "la panel" | Toano Panel |
 | "el camioncito" | Miler |
 | "el tracto" | ESTA 6x4 |
-| "miller" (con doble L) | Miler |
+| "miller" (doble L) | Miler |
 | "tunlan" / "tunlad" | Tunland |
 
-**Valores posibles en el dropdown de Monday:**
+**Valores posibles típicos en el dropdown:**
 Tunland E5, ESTA 6x4 11.8, ESTA 6x4 X13, Miler, Toano Panel, Tunland G7, Tunland G9, Cascadia.
 
 ---
 
 ### 4.3 Envío de cotización o ficha técnica (PDF)
 
-**Qué lo dispara:** El cliente solicita un documento, usando frases como:
+**Evento disparador:**
+- El cliente solicita documentación técnica o financiera.
+
+**Ejemplos de frases:**
 - "Mándame la ficha técnica"
 - "¿Me pasas la corrida financiera?"
-- "Quiero ver las especificaciones"
+- "Quiero ver especificaciones"
 - "Envíame la simulación de pagos"
 
-**Qué aparece en Monday:**
-- Estado avanza a "Cotización".
-- Nota: "Cotización enviada: [Modelo]".
+**Condiciones necesarias:**
+- Detección de palabras clave (acción + tipo de documento).
+- Modelo de vehículo identificado.
+- Documento disponible en la fuente de documentos (financing.json).
 
-**Documentos disponibles:**
-- **Ficha técnica:** Especificaciones del vehículo en PDF.
-- **Corrida financiera:** Simulación de enganche, mensualidades y tasas en PDF.
+**Acción ejecutada:**
+- El bot envía un mensaje introductorio.
+- Envía el PDF correspondiente.
+- El estado del lead cambia a "Cotización".
+- Se agrega nota: "Cotización enviada: [Modelo]".
+
+**Tipos de documentos:**
+- Ficha técnica (PDF).
+- Corrida financiera (PDF: enganche, mensualidades, tasas).
 
 ---
 
-### 4.4 Cita programada
+### 4.4 Cita Programada (agendamiento)
 
-**Qué lo dispara:** El cliente confirma una cita indicando día y hora, y el bot ya tiene su nombre y modelo de interés.
+**Evento disparador:**
+- El cliente confirma día y hora para una reunión / visita.
 
-**Datos que el bot necesita antes de confirmar la cita:**
-1. Nombre del cliente (lo pide si no lo tiene).
-2. Modelo de interés (detectado de la conversación).
-3. Día y hora de la visita.
+**Condiciones necesarias:**
+- Nombre válido:
+  - Mínimo 3 caracteres.
+  - Sin palabras de rechazo o evasión.
+- Interés identificado (modelo):
+  - Mínimo 2 caracteres (o equivalente validado por catálogo).
+- Cita confirmada:
+  - Datos mínimos interpretables (día y hora).
 
-**Qué aparece en Monday:**
-- Estado avanza a "Cita Programada".
-- Columna "Agenda Citas (Día)" con la fecha.
-- Columna "Hora Cita" con el horario.
-- Nombre del ítem actualizado con el nombre real del cliente.
-- Nota con los detalles de la cita.
+**Acción ejecutada:**
+- El lead se actualiza en Monday.com.
+- Estado cambia a "Cita Programada".
+- La fecha se formatea a estándar ISO.
+- Se registra "Agenda Citas (Día)" y "Hora Cita".
+- El nombre del ítem se actualiza con el nombre real del cliente.
+- Se agrega nota con el detalle de la cita.
+- Si existe un teléfono de asesor responsable (conceptualmente OWNER_PHONE), se envía notificación automática por WhatsApp al responsable.
 
-**El bot interpreta horarios naturales:**
+**Interpretación de horarios en lenguaje natural (ejemplos):**
 
 | El cliente dice... | Monday registra... |
 |-------------------|-------------------|
@@ -191,16 +218,25 @@ Tunland E5, ESTA 6x4 11.8, ESTA 6x4 X13, Miler, Toano Panel, Tunland G7, Tunland
 | "Miércoles a medio día" | Próximo miércoles, 12:00 |
 | "Lunes a las 10 y media" | Próximo lunes, 10:30 |
 
-**Nota importante:** El bot sabe que los domingos la agencia está cerrada. Si el cliente propone domingo, sugiere lunes o sábado como alternativa.
+**Restricción operativa:**
+- El bot sabe que domingo la agencia está cerrada.
+- Si el cliente propone domingo, el bot sugiere alternativas (sábado o lunes).
 
 ---
 
 ### 4.5 Detección de método de pago
 
-**Qué lo dispara:** El cliente menciona cómo piensa pagar durante la conversación.
+**Evento disparador:**
+- El cliente menciona su forma de pago.
 
-**Qué aparece en Monday:**
-- La columna "Esquema de Pago" se actualiza con uno de estos valores:
+**Palabras clave detectadas (ejemplos):**
+contado, cash, crédito, financiamiento, mensualidades, no quiero crédito.
+
+**Acción ejecutada:**
+- Se actualiza la memoria contextual de la conversación.
+- Se actualiza la columna "Esquema de Pago" en Monday.
+
+**Valores posibles:**
 
 | El cliente dice... | Monday registra... |
 |-------------------|-------------------|
@@ -210,164 +246,247 @@ Tunland E5, ESTA 6x4 11.8, ESTA 6x4 X13, Miler, Toano Panel, Tunland G7, Tunland
 
 ---
 
-### 4.6 Detección de desinterés
+### 4.6 Detección de desinterés (rechazo explícito)
 
-**Qué lo dispara:** El cliente expresa explícitamente que no le interesa, usando frases como:
-- "No me interesa"
-- "Ya no quiero"
-- "No gracias"
-- "Cancela"
-- "Dejen de escribirme"
-- "STOP" / "BAJA"
+**Evento disparador:**
+- El cliente expresa rechazo explícito.
 
-**Qué aparece en Monday:**
-- Estado cambia a "Sin Interés" (sin importar en qué etapa estuviera).
-- Nota: "Lead expresó desinterés".
-- Si el mismo cliente vuelve a escribir en el futuro, se crea un **nuevo registro**.
+**Frases típicas:**
+"no me interesa", "ya no quiero", "no gracias", "cancela", "dejen de escribirme", "STOP", "BAJA" y variantes.
 
----
-
-### 4.7 Atribución de origen (Facebook / Instagram)
-
-**Qué lo dispara:** Cuando el cliente llega al WhatsApp desde un anuncio o publicación de Facebook/Instagram (click-to-WhatsApp).
-
-**Qué aparece en Monday (automático, sin intervención):**
-
-| Columna | Ejemplo |
-|---------|---------|
-| **Origen Lead** | "Facebook Ad", "Instagram Post", "Directo" |
-| **Canal** | "Facebook", "Instagram", "Directo" |
-| **Tipo Origen** | "Ad" (anuncio pagado), "Post" (publicación orgánica), "Directo" |
-| **Ad ID** | Identificador del anuncio en Meta |
-| **CTWA Click ID** | Identificador del clic del usuario |
-
-**Valores posibles de Origen:**
-Facebook Ad, Facebook Post, Instagram Ad, Instagram Post, Facebook, Instagram, Directo.
-
-Esto permite medir qué campañas y anuncios generan más leads directamente desde Monday.
+**Acción ejecutada:**
+- El estado cambia inmediatamente a "Sin Interés" (override global).
+- Se agrega nota: "Lead expresó desinterés".
+- Se considera terminal.
+- Si el cliente regresa posteriormente, se crea un nuevo lead.
 
 ---
 
-## 5. Acciones que Requieren Intervención Humana
+### 4.7 Envío de fotos de vehículos (carrusel)
 
-### Etapas manuales del embudo
-Las siguientes etapas **solo las puede mover el equipo de ventas** desde Monday:
+**Evento disparador:**
+- El cliente solicita imágenes o pide continuar ("mándame fotos", "otra", "siguiente").
 
-| Etapa | Cuándo moverla |
-|-------|---------------|
-| **Cita Atendida** | El cliente llegó a la agencia. |
-| **Cita No Atendida** | El cliente no se presentó en la fecha acordada. |
-| **Venta Cerrada** | Se firmó y se entregó la unidad. |
-| **Financiamiento en Gestión** | El crédito está en trámite. |
-| **Venta Caída** | El cliente decidió no comprar después de visitar. |
+**Condiciones necesarias:**
+- Modelo identificado en inventario.
 
-### Confirmación CMV
-La columna "Confirmación CMV" es un checkbox que **solo marca el equipo**. El bot no lo toca.
-
-### Handoff a humano
-Cuando un asesor real toma la conversación (responde desde el celular), el bot lo detecta automáticamente y **se silencia durante 60 minutos** para no interferir. Después de ese tiempo, el bot se reactiva por si el cliente escribe y nadie lo atiende.
+**Acción ejecutada:**
+- Envío inicial: lote de 3 fotos exteriores del modelo solicitado.
+- Bajo demanda: envíos individuales posteriores.
+- Control de navegación: se mantiene un índice (conceptualmente photo_index) almacenado en SQLite para saber cuál es la "siguiente foto" por usuario y por modelo.
 
 ---
 
-## 6. Capacidades del Bot en la Conversación
+### 4.8 Procesamiento de multimedia entrante
 
-Además de registrar datos en Monday, el bot ofrece las siguientes funciones al cliente:
+**4.8.1 Notas de voz**
 
-| Capacidad | Descripción |
-|-----------|-------------|
-| **Fotos del inventario** | Envía hasta 3 fotos exteriores del modelo solicitado. El cliente puede pedir "otra foto" para ver más. |
-| **Fichas técnicas en PDF** | Envía el documento de especificaciones del vehículo. |
-| **Simulación de financiamiento en PDF** | Envía corrida con enganche (20%), mensualidad, tasa y CAT. Siempre aclara que es ilustrativa. |
-| **Información de financiamiento** | Responde preguntas sobre enganche mínimo, plazos y mensualidades. Si la unidad no aplica para crédito, lo indica. |
-| **Transcripción de audios** | Si el cliente envía una nota de voz, el bot la transcribe y responde como si fuera texto. |
-| **Análisis de imágenes** | Si el cliente envía una foto de un vehículo, el bot la analiza e identifica si es un modelo del inventario. |
-| **Horarios y ubicación** | Informa horarios de atención (L-V 9-6, Sáb 9-2) y ubicación de la agencia. |
-| **Derivación a asesor** | Cuando el cliente necesita atención personalizada (financiamiento especial, negociación), el bot avisa al responsable. |
+Proceso:
+- Descarga del archivo.
+- Desencriptado.
+- Transcripción mediante Whisper API.
+- El texto transcrito se incorpora al motor conversacional como si el cliente lo hubiera escrito.
 
-### Reglas de financiamiento
-- El enganche mínimo siempre es **20% del valor factura**.
-- El plazo base es **48 meses**.
-- Los montos incluyen interés, IVA y seguro.
-- Siempre se aclara que los números son **ilustrativos**.
-- Si la unidad no aplica para financiamiento, el bot lo dice y sugiere unidades que sí aplican.
-- Si el cliente pide condiciones especiales (más plazo, menos enganche, quitar seguro), el bot lo deriva a un asesor humano.
+**4.8.2 Imágenes enviadas por el cliente**
+
+Proceso:
+- Análisis mediante Gemini Vision o OpenAI Vision.
+- Se genera una descripción breve enfocada en vehículos o documentos.
+- Esa descripción se incorpora al contexto para responder mejor (por ejemplo: identificar si la imagen parece un vehículo del inventario).
 
 ---
 
-## 7. Alertas al Responsable
+### 4.9 Detección de intervención humana (handoff)
 
-El bot envía alertas por WhatsApp al responsable designado cuando ocurren eventos importantes:
+**Evento disparador:**
+- Mensaje enviado desde el mismo número (canal) pero no generado por el bot.
 
-### Alerta de Lead Calificado
-**Cuándo:** El bot cerró una cita (nombre + modelo + fecha confirmada).
+**Condiciones (anti-falsos positivos):**
+- fromMe = true.
+- El ID del mensaje no existe en el registro de mensajes enviados por el bot.
+- El texto no coincide con caché reciente (evitar confundir eco o reintentos).
+- No es un mensaje automático de WhatsApp Business.
 
-**Contenido:**
+**Acción ejecutada:**
+- El bot se silencia para ese usuario durante 60 minutos (no interfiere con el asesor).
+
+---
+
+### 4.10 Tracking de origen del lead (Referral Tracking)
+
+**Evento disparador:**
+- Primer mensaje que incluye información de referencia.
+
+**Datos detectables:**
+referral, conversionSource, ad_id, ctwa_clid.
+
+**Acción ejecutada:**
+- Se almacenan los datos en la sesión.
+- Se actualizan columnas en Monday: Origen Lead, Canal, Tipo de Origen (y cuando aplique: Ad ID, Click ID).
+
+────────────────────────────────────────────────────────────
+## 5) ACCIONES ASÍNCRONAS Y AUTOMATIZACIONES (GESTIÓN DE ESTADOS)
+────────────────────────────────────────────────────────────
+
+### 5.1 Acumulación de mensajes (debouncing)
+
+**Objetivo:**
+Si el cliente manda varios mensajes seguidos, se agrupan y se procesan como una sola entrada para evitar respuestas fragmentadas.
+
+**Temporizador:** 8 segundos.
+
+**Protección adicional:**
+Locks de concurrencia por JID (remoteJid) para evitar condiciones de carrera (mensajes simultáneos, reintentos de webhook, etc.).
+
+---
+
+### 5.2 Reactivación automática del bot
+
+**Temporizador:** 60 minutos.
+
+**Condición:**
+El bot fue silenciado por intervención humana o por comando (por ejemplo /silencio).
+
+**Acción:**
+Se elimina al usuario de la lista de silenciados y el bot vuelve a responder.
+
+---
+
+### 5.3 Actualización del inventario
+
+**Temporizador:** 300 segundos (5 minutos).
+
+**Acciones:**
+- Descarga el catálogo desde Google Sheets o un CSV local.
+- Filtra unidades agotadas o no disponibles.
+
+**Condiciones de exclusión:**
+- Cantidad menor o igual a 0.
+- Status distinto de "disponible".
+
+**Resultado:**
+El bot siempre responde con base en inventario activo, minimizando errores de disponibilidad.
+
+────────────────────────────────────────────────────────────
+## 6) REGLAS DE VALIDACIÓN, SEGURIDAD Y CALIDAD DE INFORMACIÓN
+────────────────────────────────────────────────────────────
+
+### 6.1 Candado de nombre (Name Gate)
+
+El bot **NO puede:**
+- Dar precios.
+- Enviar cotizaciones.
+- Agendar citas.
+
+...hasta haber identificado un nombre válido del cliente.
+
+Esto previene cotizaciones "a nadie" y asegura formalidad del lead.
+
+---
+
+### 6.2 Anti-alucinación estricta
+
+El bot tiene prohibido inventar vehículos, precios, disponibilidad o datos no presentes.
+
+Si el modelo solicitado no aparece en el inventario, el bot debe:
+- Informar que no se maneja ese modelo.
+- Sugerir alternativas reales disponibles.
+
+---
+
+### 6.3 Interpretación de vehículos de carga (aclaración obligatoria)
+
+Si el cliente pregunta "¿cuántos caben?" y el vehículo detectado es panel/chasis/carga:
+- El bot debe aclarar que la unidad es para carga.
+- Indicar que los asientos disponibles son los de cabina (no "pasajeros tipo van de turismo").
+
+---
+
+### 6.4 Control de memoria y deduplicación (robustez)
+
+Estructuras de control (ejemplo conceptual):
+- BoundedOrderedSet para rastrear:
+  - IDs de mensajes procesados (límite 4000).
+  - IDs de leads procesados (límite 8000).
+
+Previene:
+- Fugas de memoria.
+- Bucles de webhook.
+- Reprocesamiento de eventos.
+- Duplicación de acciones (ej. crear lead 2 veces).
+
+────────────────────────────────────────────────────────────
+## 7) ALERTAS AL RESPONSABLE (WHATSAPP)
+────────────────────────────────────────────────────────────
+
+### 7.1 Alerta de Lead Calificado (cita cerrada)
+
+**Cuándo:**
+Cuando el bot confirma cita (ya tiene nombre + modelo + fecha/hora).
+
+**Contenido típico:**
 > **NUEVO LEAD EN MONDAY**
-> Cliente: wa.me/5551234567
-> El bot cerró una cita. Revisa el tablero.
-> Origen: Facebook Ad *(si aplica)*
+> Enlace wa.me del cliente
+> Indicación de que se cerró una cita
+> Origen del lead (si aplica)
 
-### Alerta de Interés Detectado
-**Cuándo:** El cliente muestra interés activo (pregunta precio, quiere comprar, pide ubicación) pero aún no agenda cita.
+---
 
-**Contenido:**
+### 7.2 Alerta de Interés Detectado (lead caliente sin cita)
+
+**Cuándo:**
+El cliente pregunta precio, muestra intención fuerte o pide ubicación, pero todavía no agenda.
+
+**Contenido típico:**
 > **Interés Detectado**
-> Cliente: wa.me/5551234567
-> Dijo: "¿Cuál es el precio de la Tunland G9?"
-> Bot: "La Tunland G9 está en $499,000 MXN IVA incluido..."
-> Origen: Instagram Ad *(si aplica)*
+> Enlace wa.me del cliente
+> Texto exacto del cliente
+> Respuesta del bot
+> Origen (si aplica)
 
-Esto permite al equipo intervenir proactivamente con leads calientes sin esperar a que el bot cierre la cita.
+**Objetivo:**
+Permite intervención proactiva de ventas para acelerar cierre.
 
----
+────────────────────────────────────────────────────────────
+## 8) FUENTES DEL SISTEMA (ARCHIVOS Y RESPONSABILIDADES)
+────────────────────────────────────────────────────────────
 
-## 8. Protección y Calidad de Datos
+**conversation_logic.py**
+- Prompt principal.
+- Reglas de IA.
+- Extracción de variables (nombre, cita, pago).
+- Manejo de PDFs y carrusel de imágenes.
 
-### No se duplican leads
-El bot busca el teléfono del cliente antes de crear un registro nuevo. Si ya existe, actualiza el mismo ítem. Solo crea uno nuevo si el registro anterior ya está en un estado cerrado (Venta Cerrada, Venta Caída o Sin Interés).
+**main.py**
+- Gestión de webhooks.
+- Debouncing.
+- Procesamiento de audio con Whisper.
+- Análisis de imágenes.
+- Tracking de referral.
+- Detección de handoff humano.
 
-### Mensajes agrupados
-Si el cliente envía varios mensajes seguidos en menos de 8 segundos ("Hola" → "Me interesa" → "la Tunland G9"), el bot los agrupa y responde una sola vez. Esto evita respuestas fragmentadas y mantiene la conversación natural.
+**monday_service.py**
+- Mutaciones GraphQL hacia Monday.com.
+- Mapeo de dropdowns de vehículos.
+- Formateo de fechas ISO.
+- Control de jerarquía del embudo (solo avance).
 
-### Inventario siempre actualizado
-El catálogo de vehículos se sincroniza automáticamente desde la hoja de cálculo de Google Sheets cada 5 minutos. Si se agrega o elimina una unidad en la hoja, el bot lo refleja en sus respuestas sin necesidad de reiniciarlo.
+**inventory_service.py**
+- Parser del catálogo de vehículos.
+- Filtrado de unidades agotadas.
+- Control de caché y refresco del inventario.
 
-### El bot nunca inventa información
-Si un modelo no está en el inventario, el bot no lo menciona. Si no tiene un dato, dice "Eso lo confirmo y te aviso" en lugar de inventar. Los precios, especificaciones y disponibilidad siempre vienen del inventario real.
+────────────────────────────────────────────────────────────
+## 9) RESUMEN EJECUTIVO DEL FLUJO COMPLETO
+────────────────────────────────────────────────────────────
 
----
+1. Cliente escribe por WhatsApp (primer mensaje).
+2. Se crea lead en Monday, estado "1er Contacto", se captura teléfono y origen.
+3. Cliente menciona modelo: se detecta interés, estado "Intención", se normaliza el vehículo.
+4. Cliente pide PDF: se envía ficha/corrida, estado "Cotización".
+5. Cliente confirma día/hora: se valida nombre y se agenda, estado "Cita Programada", se notifica al asesor.
+6. Si el cliente rechaza: "Sin Interés" inmediato (terminal).
+7. Equipo mueve estados finales: cita atendida/no atendida, financiamiento, venta cerrada o caída.
+8. Si el cliente regresa después de un estado terminal: se crea un nuevo ciclo con un nuevo lead.
 
-## Resumen: Flujo Completo de Datos
-
-```
-Cliente envía mensaje por WhatsApp
-         |
-         v
-  Bot responde y extrae información
-         |
-         v
-  Monday.com se actualiza automáticamente
-  ┌─────────────────────────────────────────────┐
-  │  Nuevo ítem → "1er Contacto"                │
-  │  Menciona modelo → "Intención" + Vehículo   │
-  │  Pide PDF → "Cotización"                    │
-  │  Confirma cita → "Cita Programada" + Fecha  │
-  │  Dice no → "Sin Interés"                    │
-  └─────────────────────────────────────────────┘
-         |
-         v
-  Alerta al responsable por WhatsApp
-         |
-         v
-  Equipo toma el control en Monday
-  ┌─────────────────────────────────────────────┐
-  │  Cita Atendida / No Atendida                │
-  │  Venta Cerrada / Financiamiento en Gestión  │
-  │  Venta Caída                                │
-  └─────────────────────────────────────────────┘
-```
-
----
-
-*Documento generado como referencia operativa para el equipo de Tractos y Max.*
-*Última actualización: Marzo 2026.*
+────────────────────────────────────────────────────────────
