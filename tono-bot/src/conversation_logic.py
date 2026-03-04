@@ -91,6 +91,7 @@ INFORMACIÓN DEL DISTRIBUIDOR:
 - SERVICIO: El cliente puede hacer mantenimiento en cualquier distribuidor autorizado de la marca correspondiente sin perder garantía.
 - TIPO DE CABINA Y ASIENTOS: Consulta el inventario, cada modelo indica su tipo de cabina y número de asientos.
 - SPECS TÉCNICAS: Algunos modelos incluyen Transmisión, Paso, Rodada, Eje Delantera, Eje Trasera y Dormitorio. Si el cliente pregunta por alguna de estas características, consulta el inventario.
+- COMBUSTIBLE (CRÍTICO): La Tunland E5 es de GASOLINA, NO diésel. NUNCA digas que la E5 es diésel. Si el inventario incluye un campo de combustible, úsalo. Si no tiene ese campo, NO asumas que es diésel solo por ser camión o vehículo comercial.
 
 DOCUMENTACIÓN PARA COMPRA:
 - CONTADO: INE vigente + comprobante de domicilio. Si quiere factura a su RFC, también Constancia de Situación Fiscal.
@@ -103,8 +104,18 @@ REGLAS OBLIGATORIAS:
 - Si una marca o modelo aparece en el inventario → Tractos y Max LO VENDE. Sin excepción.
 - Las marcas cambian con el tiempo; el inventario siempre tiene la lista actualizada.
 - NUNCA digas "no manejamos esa marca" o "no tenemos esa marca" si la marca aparece en el inventario.
-- Si el cliente pregunta por un vehículo: búscalo en INVENTARIO DISPONIBLE. Si está ahí → "Sí lo manejamos." Si no está → "Por el momento no tenemos esa unidad, pero tenemos otras opciones."
+- Si el cliente pregunta por un vehículo: búscalo en INVENTARIO DISPONIBLE. Si está ahí → "Sí lo manejamos." Si no está → "Por el momento no tenemos esa unidad, pero tenemos estas opciones:" y lista lo que SÍ tenemos.
 - SIEMPRE ofrece lo que SÍ está en inventario cuando el cliente pregunta por algo que no tenemos.
+- ANTI-ALUCINACIÓN (CRÍTICO): NUNCA menciones marcas ni modelos que NO aparezcan en INVENTARIO DISPONIBLE. Si el cliente pide "Frontier", "NP300", "JAC", "Hilux" u otro vehículo que NO está en el inventario, NO digas "tenemos la JAC T6" ni inventes modelos. Solo menciona EXACTAMENTE los modelos que están en el INVENTARIO. Si inventas un vehículo que no existe, el cliente vendrá a buscarlo y se irá enojado.
+- Ejemplo CORRECTO: Cliente: "Tienen Frontier?" → "Por el momento no manejamos Frontier. Tenemos la FOTON TUNLAND G7 y G9 que son pickups doble cabina. Te doy información?"
+- Ejemplo INCORRECTO: Cliente: "Tienen JAC?" → "Sí, tenemos la JAC T6." (PROHIBIDO - inventar modelos que no están en inventario)
+
+0.6) TRACCIÓN — 4x2 vs 4x4 vs 6x4 (CRÍTICO):
+- Cada vehículo del inventario tiene su tracción indicada (4x2, 4x4, 6x4). USA EXACTAMENTE la que dice el inventario.
+- NUNCA digas que un vehículo es 4x4 si en el inventario dice 4x2, ni viceversa.
+- Si el cliente pregunta "¿es 4x4?" → revisa el campo Tracción del inventario y responde con el dato exacto.
+- Si el cliente busca específicamente 4x4, muestra SOLO las unidades que dicen 4x4 en el inventario.
+- Ejemplo: La Tunland G9 es 4x4. La Miler es 4x2. No los confundas.
 
 0.5) INTERPRETACIÓN COMERCIAL — CARGA vs. PASAJEROS (CRÍTICO):
 - Cuando el cliente pregunte por "asientos", "pasajeros", "cuántos caben", "de cuántos es", "bancas", "filas de asientos", "para personal", "transporte de personal" o "es panel o van":
@@ -247,7 +258,8 @@ REGLAS OBLIGATORIAS:
 15) PROHIBIDO:
 - Emojis
 - Explicaciones largas
-- Inventar información
+- INVENTAR VEHÍCULOS: NUNCA menciones marcas o modelos que NO estén en INVENTARIO DISPONIBLE (ej: JAC, Nissan, Toyota, Hino, International, Kenworth, etc. a menos que aparezcan en el inventario)
+- Inventar información, precios, especificaciones o datos que no estén en el inventario
 - Calcular financiamiento para unidades que dicen "No" en campo Financiamiento
 - Pedir nombre antes de dar el tuyo
 - Cambiar de modelo sin confirmación del cliente
@@ -258,11 +270,12 @@ REGLAS OBLIGATORIAS:
 - Presentar una unidad sin mencionar si es de CARGA o PASAJEROS en la primera mención
 
 16) NOMBRE OBLIGATORIO ANTES DE COTIZACIÓN O CITA:
-- ANTES de dar precio, cotización, corrida financiera o agendar cita, NECESITAS el nombre del cliente.
-- Si CLIENTE = "(Aún no dice su nombre)" y el cliente pide precio/cotización/cita, PRIMERO pregunta su nombre.
-  * Ejemplo: "Con gusto te paso el precio. ¿Con quién tengo el gusto?"
-  * Ejemplo: "Claro que sí. ¿Me compartes tu nombre para darte la cotización?"
-- NO des precio, cotización ni agendes cita hasta tener el nombre.
+- ANTES de dar cotización personalizada, corrida financiera o agendar cita, NECESITAS el nombre del cliente.
+- PERO PRIMERO RESPONDE LA PREGUNTA DEL CLIENTE, y LUEGO pide el nombre. NUNCA ignores su pregunta para pedir el nombre.
+  * CORRECTO: "El enganche mínimo es del 20%, como referencia ilustrativa. ¿Con quién tengo el gusto para darte más detalles?"
+  * CORRECTO: "Claro, ese modelo está en $390,000. ¿Me compartes tu nombre para cotizarte?"
+  * INCORRECTO: "Con gusto, ¿con quién tengo el gusto?" (ignorando lo que preguntó el cliente)
+- Preguntas GENERALES de financiamiento (enganche, si hay crédito, plazos, mensualidad estimada) SÍ puedes responderlas sin nombre.
 - Si ya tienes el nombre (aparece en CLIENTE), NO lo vuelvas a pedir.
 - Esto aplica SIEMPRE, sin excepción.
 """.strip()
@@ -612,6 +625,16 @@ def _build_inventory_text(inventory_service) -> str:
         if colores:
             info += f" | Colores: {colores}"
 
+        # Tracción (4x2, 4x4)
+        traccion = _safe_get(item, ["Traccion", "Tracción", "traccion"])
+        if traccion:
+            info += f" | Tracción: {traccion}"
+
+        # Descripción corta (contexto adicional del Sheet)
+        desc_corta = _safe_get(item, ["descripcion_corta"])
+        if desc_corta:
+            info += f" | Desc: {desc_corta}"
+
         # Tipo de uso: CARGA vs PASAJEROS (inferido del modelo)
         modelo_lower = modelo.lower()
         tipo_uso = _safe_get(item, ["TipoUso", "tipo_uso", "tipouso"])
@@ -648,7 +671,7 @@ def _build_inventory_text(inventory_service) -> str:
 
         specs = []
         if combustible:
-            specs.append(combustible)
+            specs.append(f"Combustible: {combustible}")
         if motor:
             specs.append(f"Motor: {motor}")
         if capacidad:
@@ -702,99 +725,110 @@ def _build_focused_inventory_text(inventory_service, last_interest: str) -> str:
     interest_norm = _normalize_spanish(last_interest)
     interest_tokens = [t for t in interest_norm.split() if len(t) >= 2 and t not in {"foton", "freightliner", "camion", "camión"}]
 
+    # Detect year tokens (e.g. "2023", "2024") in the interest string
+    year_tokens = [t for t in interest_tokens if re.fullmatch(r"20\d{2}", t)]
+    model_tokens = [t for t in interest_tokens if not re.fullmatch(r"20\d{2}", t)]
+
+    matched_infos: list[str] = []
     for item in items:
         modelo = _safe_get(item, ["Modelo", "modelo", "id_modelo"]).strip()
         if not modelo:
             continue
         modelo_norm = _normalize_spanish(modelo)
-        if any(tok in modelo_norm for tok in interest_tokens):
-            precio = _safe_get(item, ["Precio", "precio"], default="N/D")
-            moneda = _safe_get(item, ["moneda"], default="MXN")
-            iva = _safe_get(item, ["iva_incluido"], default="")
-            marca = _safe_get(item, ["Marca", "marca"])
-            anio = _safe_get(item, ["Anio", "Año", "anio"], default="")
-            price_str = _format_price(precio, moneda, iva)
-            label = f"{marca} {modelo}".strip() if marca else modelo
-            info = f"Modelo de interés: {label} {anio}: {price_str}"
+        # Must match at least one model token (non-year)
+        if not model_tokens or not any(tok in modelo_norm for tok in model_tokens):
+            continue
+        # If a year was specified in the interest, filter by year too
+        anio = _safe_get(item, ["Anio", "Año", "anio"], default="")
+        if year_tokens and anio and not any(yt == anio.strip() for yt in year_tokens):
+            continue
 
-            # Tipo de uso: CARGA vs PASAJEROS
-            modelo_lower = modelo.lower()
-            tipo_uso = _safe_get(item, ["TipoUso", "tipo_uso", "tipouso"])
-            if not tipo_uso:
-                if any(kw in modelo_lower for kw in ("panel", "chasis", "volteo", "revolvedora")):
-                    tipo_uso = "CARGA"
-                elif any(kw in modelo_lower for kw in ("pasajero", "bus", "escolar")):
-                    tipo_uso = "PASAJEROS"
-                elif any(kw in modelo_lower for kw in ("esta", "miler")):
-                    tipo_uso = "CARGA"
-            if tipo_uso:
-                info += f" | Uso: {tipo_uso}"
+        precio = _safe_get(item, ["Precio", "precio"], default="N/D")
+        moneda = _safe_get(item, ["moneda"], default="MXN")
+        iva = _safe_get(item, ["iva_incluido"], default="")
+        marca = _safe_get(item, ["Marca", "marca"])
+        price_str = _format_price(precio, moneda, iva)
+        label = f"{marca} {modelo}".strip() if marca else modelo
+        info = f"Modelo de interés: {label} {anio}: {price_str}"
 
-            # Tipo de cabina y asientos
-            tipo_cabina = _safe_get(item, ["TipoCabina", "tipocabina", "tipo_cabina"])
-            asientos = _safe_get(item, ["Asientos", "asientos"])
-            if tipo_cabina:
-                cab_info = tipo_cabina
-                if asientos:
-                    cab_qualifier = " en cabina" if tipo_uso == "CARGA" else ""
-                    cab_info += f", {asientos} asientos{cab_qualifier}"
-                info += f" | {cab_info}"
+        # Tipo de uso: CARGA vs PASAJEROS
+        modelo_lower = modelo.lower()
+        tipo_uso = _safe_get(item, ["TipoUso", "tipo_uso", "tipouso"])
+        if not tipo_uso:
+            if any(kw in modelo_lower for kw in ("panel", "chasis", "volteo", "revolvedora")):
+                tipo_uso = "CARGA"
+            elif any(kw in modelo_lower for kw in ("pasajero", "bus", "escolar")):
+                tipo_uso = "PASAJEROS"
+            elif any(kw in modelo_lower for kw in ("esta", "miler")):
+                tipo_uso = "CARGA"
+        if tipo_uso:
+            info += f" | Uso: {tipo_uso}"
 
-            # Specs adicionales para modelo enfocado
-            specs = []
-            combustible = _normalize_fuel(_safe_get(item, ["COMBUSTIBLE", "combustible"]))
-            motor = _summarize_motor(_safe_get(item, ["MOTOR", "motor"]))
-            capacidad = _summarize_capacity(_safe_get(item, ["CAPACIDAD DE CARGA"]))
-            transmision = _safe_get(item, ["Transmision", "Transmisión", "transmision"])
-            paso = _safe_get(item, ["Paso", "paso"])
-            rodada = _safe_get(item, ["Rodada", "rodada"])
-            eje_del = _safe_get(item, ["EjeDelantera", "Eje Delantera", "ejedelantera"])
-            eje_tras = _safe_get(item, ["EjeTrasera", "Eje Trasera", "ejetrasera"])
-            dormitorio = _safe_get(item, ["Dormitorio", "dormitorio"])
-            if combustible:
-                specs.append(combustible)
-            if motor:
-                specs.append(f"Motor: {motor}")
-            if capacidad:
-                specs.append(f"Carga: {capacidad}")
-            if transmision:
-                specs.append(f"Transmisión: {transmision}")
-            if paso:
-                specs.append(f"Paso: {paso}")
-            if rodada:
-                specs.append(f"Rodada: {rodada}")
-            if eje_del:
-                specs.append(f"Eje Del.: {eje_del}")
-            if eje_tras:
-                specs.append(f"Eje Tras.: {eje_tras}")
-            if dormitorio:
-                specs.append(f"Dormitorio: {dormitorio}")
-            if specs:
-                info += " | " + ", ".join(specs)
+        # Tipo de cabina y asientos
+        tipo_cabina = _safe_get(item, ["TipoCabina", "tipocabina", "tipo_cabina"])
+        asientos = _safe_get(item, ["Asientos", "asientos"])
+        if tipo_cabina:
+            cab_info = tipo_cabina
+            if asientos:
+                cab_qualifier = " en cabina" if tipo_uso == "CARGA" else ""
+                cab_info += f", {asientos} asientos{cab_qualifier}"
+            info += f" | {cab_info}"
 
-            # Financiamiento disponible (desde el Sheet) - normalizar a Sí/No
-            financiamiento_raw = _safe_get(item, ["Financiamiento", "financiamiento"])
-            if financiamiento_raw:
-                fin_lower = str(financiamiento_raw).strip().lower()
-                if fin_lower in ("false", "no", "no aplica", "solo contado", "sin credito"):
-                    info += " | Financiamiento: No"
-                elif fin_lower in ("true", "si", "sí"):
-                    info += " | Financiamiento: Sí"
-                else:
-                    info += f" | Financiamiento: {financiamiento_raw}"
+        # Specs adicionales para modelo enfocado
+        specs = []
+        combustible = _normalize_fuel(_safe_get(item, ["COMBUSTIBLE", "combustible"]))
+        motor = _summarize_motor(_safe_get(item, ["MOTOR", "motor"]))
+        capacidad = _summarize_capacity(_safe_get(item, ["CAPACIDAD DE CARGA"]))
+        transmision = _safe_get(item, ["Transmision", "Transmisión", "transmision"])
+        paso = _safe_get(item, ["Paso", "paso"])
+        rodada = _safe_get(item, ["Rodada", "rodada"])
+        eje_del = _safe_get(item, ["EjeDelantera", "Eje Delantera", "ejedelantera"])
+        eje_tras = _safe_get(item, ["EjeTrasera", "Eje Trasera", "ejetrasera"])
+        dormitorio = _safe_get(item, ["Dormitorio", "dormitorio"])
+        if combustible:
+            specs.append(f"Combustible: {combustible}")
+        if motor:
+            specs.append(f"Motor: {motor}")
+        if capacidad:
+            specs.append(f"Carga: {capacidad}")
+        if transmision:
+            specs.append(f"Transmisión: {transmision}")
+        if paso:
+            specs.append(f"Paso: {paso}")
+        if rodada:
+            specs.append(f"Rodada: {rodada}")
+        if eje_del:
+            specs.append(f"Eje Del.: {eje_del}")
+        if eje_tras:
+            specs.append(f"Eje Tras.: {eje_tras}")
+        if dormitorio:
+            specs.append(f"Dormitorio: {dormitorio}")
+        if specs:
+            info += " | " + ", ".join(specs)
 
-            # Ubicación (dinámica desde el Sheet)
-            ubicacion = _safe_get(item, ["ubicacion", "Ubicacion", "ubicación"])
-            if ubicacion:
-                ubicacion_link = _safe_get(item, ["ubicacion_link"])
-                if ubicacion_link:
-                    info += f" | Ubicación: {ubicacion} (Maps: {ubicacion_link})"
-                else:
-                    info += f" | Ubicación: {ubicacion}"
+        # Financiamiento disponible (desde el Sheet) - normalizar a Sí/No
+        financiamiento_raw = _safe_get(item, ["Financiamiento", "financiamiento"])
+        if financiamiento_raw:
+            fin_lower = str(financiamiento_raw).strip().lower()
+            if fin_lower in ("false", "no", "no aplica", "solo contado", "sin credito"):
+                info += " | Financiamiento: No"
+            elif fin_lower in ("true", "si", "sí"):
+                info += " | Financiamiento: Sí"
+            else:
+                info += f" | Financiamiento: {financiamiento_raw}"
 
-            return info
+        # Ubicación (dinámica desde el Sheet)
+        ubicacion = _safe_get(item, ["ubicacion", "Ubicacion", "ubicación"])
+        if ubicacion:
+            ubicacion_link = _safe_get(item, ["ubicacion_link"])
+            if ubicacion_link:
+                info += f" | Ubicación: {ubicacion} (Maps: {ubicacion_link})"
+            else:
+                info += f" | Ubicación: {ubicacion}"
 
-    return ""
+        matched_infos.append(info)
+
+    return "\n".join(matched_infos) if matched_infos else ""
 
 
 def _extract_photos_from_item(item: Dict[str, Any]) -> List[str]:
@@ -1050,6 +1084,10 @@ def _extract_interest_from_messages(user_message: str, reply: str, inventory_ser
 
     best: Optional[str] = None
     best_score = 0
+    best_anio: str = ""
+
+    # Detect year mentioned in user message (e.g. "ESTA 2023")
+    year_in_msg = re.search(r'\b(20\d{2})\b', msg_norm)
 
     for item in items:
         modelo = _safe_get(item, ["Modelo", "modelo", "id_modelo"]).strip()
@@ -1057,6 +1095,7 @@ def _extract_interest_from_messages(user_message: str, reply: str, inventory_ser
             continue
 
         modelo_norm = _normalize_spanish(modelo)
+        anio = _safe_get(item, ["Anio", "Año", "anio"], default="").strip()
         # Permitir tokens de 2 caracteres para detectar G9, E5, G7, etc.
         tokens = [t for t in modelo_norm.split() if len(t) >= 2 and t not in _noise]
         if not tokens:
@@ -1071,11 +1110,22 @@ def _extract_interest_from_messages(user_message: str, reply: str, inventory_ser
             if pat.search(rep_norm):
                 score += 1
 
+        # Bonus score when user mentions a year and item's year matches
+        if year_in_msg and anio == year_in_msg.group(1):
+            score += 3
+        # Penalize when user mentions a year but item's year doesn't match
+        elif year_in_msg and anio and anio != year_in_msg.group(1):
+            score -= 2
+
         if score > best_score:
             best_score = score
             best = modelo
+            best_anio = anio
 
     if best_score >= 2:
+        # Append year to interest so downstream functions can filter by it
+        if best_anio:
+            return f"{best} {best_anio}"
         return best
 
     return None
@@ -1310,9 +1360,11 @@ def _pick_media_urls(
 
     # C) PRIORIDAD 3: Usar last_interest sin mención (para "otra foto" sin decir modelo)
     if not target_item and last_interest:
+        # Strip year from last_interest for comparison (e.g. "ESTA 6X4 11.8 2023" → "ESTA 6X4 11.8")
+        interest_no_year = re.sub(r'\s+20\d{2}$', '', last_interest).strip()
         for item in items:
             modelo = _safe_get(item, ["Modelo", "modelo", "id_modelo"]).strip()
-            if _normalize_spanish(modelo) == _normalize_spanish(last_interest):
+            if _normalize_spanish(modelo) == _normalize_spanish(interest_no_year):
                 target_item = item
                 target_model_name = modelo
                 break

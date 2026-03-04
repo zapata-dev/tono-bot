@@ -439,6 +439,27 @@ class MondayService:
             "current_stage": current_stage,
         }
 
+    async def _create_group(self, group_name: str) -> str:
+        """Crea un nuevo grupo en el tablero y retorna su ID."""
+        query = """
+        mutation ($board_id: ID!, $group_name: String!) {
+            create_group (board_id: $board_id, group_name: $group_name) {
+                id
+            }
+        }
+        """
+        variables = {
+            "board_id": int(self.board_id),
+            "group_name": group_name,
+        }
+        data = await self._graphql(query, variables)
+        group_id = data.get("data", {}).get("create_group", {}).get("id")
+        if group_id:
+            logger.info(f"✅ Grupo creado: '{group_name}' (ID: {group_id})")
+        else:
+            logger.error(f"❌ No se pudo crear grupo '{group_name}': {data}")
+        return group_id
+
     async def _get_group_id_by_name(self, group_name: str):
         if not group_name:
             return None
@@ -468,8 +489,14 @@ class MondayService:
                 logger.info(f"✅ Grupo encontrado: '{group['title']}' (ID: {group['id']})")
                 return group["id"]
 
-        logger.warning(f"⚠️ Grupo '{group_name}' no encontrado en el tablero")
-        return None
+        # Grupo no encontrado → crearlo automáticamente
+        logger.info(f"📂 Grupo '{group_name}' no encontrado, creándolo automáticamente...")
+        try:
+            new_group_id = await self._create_group(group_name)
+            return new_group_id
+        except Exception as e:
+            logger.error(f"❌ Error creando grupo '{group_name}': {e}")
+            return None
 
     def _should_advance_stage(self, current_stage: str, candidate_stage: str) -> bool:
         """V2: Solo avanza el embudo, nunca retrocede."""
