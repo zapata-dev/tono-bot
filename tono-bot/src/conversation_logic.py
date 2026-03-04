@@ -724,99 +724,110 @@ def _build_focused_inventory_text(inventory_service, last_interest: str) -> str:
     interest_norm = _normalize_spanish(last_interest)
     interest_tokens = [t for t in interest_norm.split() if len(t) >= 2 and t not in {"foton", "freightliner", "camion", "camión"}]
 
+    # Detect year tokens (e.g. "2023", "2024") in the interest string
+    year_tokens = [t for t in interest_tokens if re.fullmatch(r"20\d{2}", t)]
+    model_tokens = [t for t in interest_tokens if not re.fullmatch(r"20\d{2}", t)]
+
+    matched_infos: list[str] = []
     for item in items:
         modelo = _safe_get(item, ["Modelo", "modelo", "id_modelo"]).strip()
         if not modelo:
             continue
         modelo_norm = _normalize_spanish(modelo)
-        if any(tok in modelo_norm for tok in interest_tokens):
-            precio = _safe_get(item, ["Precio", "precio"], default="N/D")
-            moneda = _safe_get(item, ["moneda"], default="MXN")
-            iva = _safe_get(item, ["iva_incluido"], default="")
-            marca = _safe_get(item, ["Marca", "marca"])
-            anio = _safe_get(item, ["Anio", "Año", "anio"], default="")
-            price_str = _format_price(precio, moneda, iva)
-            label = f"{marca} {modelo}".strip() if marca else modelo
-            info = f"Modelo de interés: {label} {anio}: {price_str}"
+        # Must match at least one model token (non-year)
+        if not model_tokens or not any(tok in modelo_norm for tok in model_tokens):
+            continue
+        # If a year was specified in the interest, filter by year too
+        anio = _safe_get(item, ["Anio", "Año", "anio"], default="")
+        if year_tokens and anio and not any(yt == anio.strip() for yt in year_tokens):
+            continue
 
-            # Tipo de uso: CARGA vs PASAJEROS
-            modelo_lower = modelo.lower()
-            tipo_uso = _safe_get(item, ["TipoUso", "tipo_uso", "tipouso"])
-            if not tipo_uso:
-                if any(kw in modelo_lower for kw in ("panel", "chasis", "volteo", "revolvedora")):
-                    tipo_uso = "CARGA"
-                elif any(kw in modelo_lower for kw in ("pasajero", "bus", "escolar")):
-                    tipo_uso = "PASAJEROS"
-                elif any(kw in modelo_lower for kw in ("esta", "miler")):
-                    tipo_uso = "CARGA"
-            if tipo_uso:
-                info += f" | Uso: {tipo_uso}"
+        precio = _safe_get(item, ["Precio", "precio"], default="N/D")
+        moneda = _safe_get(item, ["moneda"], default="MXN")
+        iva = _safe_get(item, ["iva_incluido"], default="")
+        marca = _safe_get(item, ["Marca", "marca"])
+        price_str = _format_price(precio, moneda, iva)
+        label = f"{marca} {modelo}".strip() if marca else modelo
+        info = f"Modelo de interés: {label} {anio}: {price_str}"
 
-            # Tipo de cabina y asientos
-            tipo_cabina = _safe_get(item, ["TipoCabina", "tipocabina", "tipo_cabina"])
-            asientos = _safe_get(item, ["Asientos", "asientos"])
-            if tipo_cabina:
-                cab_info = tipo_cabina
-                if asientos:
-                    cab_qualifier = " en cabina" if tipo_uso == "CARGA" else ""
-                    cab_info += f", {asientos} asientos{cab_qualifier}"
-                info += f" | {cab_info}"
+        # Tipo de uso: CARGA vs PASAJEROS
+        modelo_lower = modelo.lower()
+        tipo_uso = _safe_get(item, ["TipoUso", "tipo_uso", "tipouso"])
+        if not tipo_uso:
+            if any(kw in modelo_lower for kw in ("panel", "chasis", "volteo", "revolvedora")):
+                tipo_uso = "CARGA"
+            elif any(kw in modelo_lower for kw in ("pasajero", "bus", "escolar")):
+                tipo_uso = "PASAJEROS"
+            elif any(kw in modelo_lower for kw in ("esta", "miler")):
+                tipo_uso = "CARGA"
+        if tipo_uso:
+            info += f" | Uso: {tipo_uso}"
 
-            # Specs adicionales para modelo enfocado
-            specs = []
-            combustible = _normalize_fuel(_safe_get(item, ["COMBUSTIBLE", "combustible"]))
-            motor = _summarize_motor(_safe_get(item, ["MOTOR", "motor"]))
-            capacidad = _summarize_capacity(_safe_get(item, ["CAPACIDAD DE CARGA"]))
-            transmision = _safe_get(item, ["Transmision", "Transmisión", "transmision"])
-            paso = _safe_get(item, ["Paso", "paso"])
-            rodada = _safe_get(item, ["Rodada", "rodada"])
-            eje_del = _safe_get(item, ["EjeDelantera", "Eje Delantera", "ejedelantera"])
-            eje_tras = _safe_get(item, ["EjeTrasera", "Eje Trasera", "ejetrasera"])
-            dormitorio = _safe_get(item, ["Dormitorio", "dormitorio"])
-            if combustible:
-                specs.append(combustible)
-            if motor:
-                specs.append(f"Motor: {motor}")
-            if capacidad:
-                specs.append(f"Carga: {capacidad}")
-            if transmision:
-                specs.append(f"Transmisión: {transmision}")
-            if paso:
-                specs.append(f"Paso: {paso}")
-            if rodada:
-                specs.append(f"Rodada: {rodada}")
-            if eje_del:
-                specs.append(f"Eje Del.: {eje_del}")
-            if eje_tras:
-                specs.append(f"Eje Tras.: {eje_tras}")
-            if dormitorio:
-                specs.append(f"Dormitorio: {dormitorio}")
-            if specs:
-                info += " | " + ", ".join(specs)
+        # Tipo de cabina y asientos
+        tipo_cabina = _safe_get(item, ["TipoCabina", "tipocabina", "tipo_cabina"])
+        asientos = _safe_get(item, ["Asientos", "asientos"])
+        if tipo_cabina:
+            cab_info = tipo_cabina
+            if asientos:
+                cab_qualifier = " en cabina" if tipo_uso == "CARGA" else ""
+                cab_info += f", {asientos} asientos{cab_qualifier}"
+            info += f" | {cab_info}"
 
-            # Financiamiento disponible (desde el Sheet) - normalizar a Sí/No
-            financiamiento_raw = _safe_get(item, ["Financiamiento", "financiamiento"])
-            if financiamiento_raw:
-                fin_lower = str(financiamiento_raw).strip().lower()
-                if fin_lower in ("false", "no", "no aplica", "solo contado", "sin credito"):
-                    info += " | Financiamiento: No"
-                elif fin_lower in ("true", "si", "sí"):
-                    info += " | Financiamiento: Sí"
-                else:
-                    info += f" | Financiamiento: {financiamiento_raw}"
+        # Specs adicionales para modelo enfocado
+        specs = []
+        combustible = _normalize_fuel(_safe_get(item, ["COMBUSTIBLE", "combustible"]))
+        motor = _summarize_motor(_safe_get(item, ["MOTOR", "motor"]))
+        capacidad = _summarize_capacity(_safe_get(item, ["CAPACIDAD DE CARGA"]))
+        transmision = _safe_get(item, ["Transmision", "Transmisión", "transmision"])
+        paso = _safe_get(item, ["Paso", "paso"])
+        rodada = _safe_get(item, ["Rodada", "rodada"])
+        eje_del = _safe_get(item, ["EjeDelantera", "Eje Delantera", "ejedelantera"])
+        eje_tras = _safe_get(item, ["EjeTrasera", "Eje Trasera", "ejetrasera"])
+        dormitorio = _safe_get(item, ["Dormitorio", "dormitorio"])
+        if combustible:
+            specs.append(combustible)
+        if motor:
+            specs.append(f"Motor: {motor}")
+        if capacidad:
+            specs.append(f"Carga: {capacidad}")
+        if transmision:
+            specs.append(f"Transmisión: {transmision}")
+        if paso:
+            specs.append(f"Paso: {paso}")
+        if rodada:
+            specs.append(f"Rodada: {rodada}")
+        if eje_del:
+            specs.append(f"Eje Del.: {eje_del}")
+        if eje_tras:
+            specs.append(f"Eje Tras.: {eje_tras}")
+        if dormitorio:
+            specs.append(f"Dormitorio: {dormitorio}")
+        if specs:
+            info += " | " + ", ".join(specs)
 
-            # Ubicación (dinámica desde el Sheet)
-            ubicacion = _safe_get(item, ["ubicacion", "Ubicacion", "ubicación"])
-            if ubicacion:
-                ubicacion_link = _safe_get(item, ["ubicacion_link"])
-                if ubicacion_link:
-                    info += f" | Ubicación: {ubicacion} (Maps: {ubicacion_link})"
-                else:
-                    info += f" | Ubicación: {ubicacion}"
+        # Financiamiento disponible (desde el Sheet) - normalizar a Sí/No
+        financiamiento_raw = _safe_get(item, ["Financiamiento", "financiamiento"])
+        if financiamiento_raw:
+            fin_lower = str(financiamiento_raw).strip().lower()
+            if fin_lower in ("false", "no", "no aplica", "solo contado", "sin credito"):
+                info += " | Financiamiento: No"
+            elif fin_lower in ("true", "si", "sí"):
+                info += " | Financiamiento: Sí"
+            else:
+                info += f" | Financiamiento: {financiamiento_raw}"
 
-            return info
+        # Ubicación (dinámica desde el Sheet)
+        ubicacion = _safe_get(item, ["ubicacion", "Ubicacion", "ubicación"])
+        if ubicacion:
+            ubicacion_link = _safe_get(item, ["ubicacion_link"])
+            if ubicacion_link:
+                info += f" | Ubicación: {ubicacion} (Maps: {ubicacion_link})"
+            else:
+                info += f" | Ubicación: {ubicacion}"
 
-    return ""
+        matched_infos.append(info)
+
+    return "\n".join(matched_infos) if matched_infos else ""
 
 
 def _extract_photos_from_item(item: Dict[str, Any]) -> List[str]:
@@ -1072,6 +1083,10 @@ def _extract_interest_from_messages(user_message: str, reply: str, inventory_ser
 
     best: Optional[str] = None
     best_score = 0
+    best_anio: str = ""
+
+    # Detect year mentioned in user message (e.g. "ESTA 2023")
+    year_in_msg = re.search(r'\b(20\d{2})\b', msg_norm)
 
     for item in items:
         modelo = _safe_get(item, ["Modelo", "modelo", "id_modelo"]).strip()
@@ -1079,6 +1094,7 @@ def _extract_interest_from_messages(user_message: str, reply: str, inventory_ser
             continue
 
         modelo_norm = _normalize_spanish(modelo)
+        anio = _safe_get(item, ["Anio", "Año", "anio"], default="").strip()
         # Permitir tokens de 2 caracteres para detectar G9, E5, G7, etc.
         tokens = [t for t in modelo_norm.split() if len(t) >= 2 and t not in _noise]
         if not tokens:
@@ -1093,11 +1109,22 @@ def _extract_interest_from_messages(user_message: str, reply: str, inventory_ser
             if pat.search(rep_norm):
                 score += 1
 
+        # Bonus score when user mentions a year and item's year matches
+        if year_in_msg and anio == year_in_msg.group(1):
+            score += 3
+        # Penalize when user mentions a year but item's year doesn't match
+        elif year_in_msg and anio and anio != year_in_msg.group(1):
+            score -= 2
+
         if score > best_score:
             best_score = score
             best = modelo
+            best_anio = anio
 
     if best_score >= 2:
+        # Append year to interest so downstream functions can filter by it
+        if best_anio:
+            return f"{best} {best_anio}"
         return best
 
     return None
