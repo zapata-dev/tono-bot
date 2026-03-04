@@ -91,6 +91,7 @@ INFORMACIÓN DEL DISTRIBUIDOR:
 - SERVICIO: El cliente puede hacer mantenimiento en cualquier distribuidor autorizado de la marca correspondiente sin perder garantía.
 - TIPO DE CABINA Y ASIENTOS: Consulta el inventario, cada modelo indica su tipo de cabina y número de asientos.
 - SPECS TÉCNICAS: Algunos modelos incluyen Transmisión, Paso, Rodada, Eje Delantera, Eje Trasera y Dormitorio. Si el cliente pregunta por alguna de estas características, consulta el inventario.
+- COMBUSTIBLE (CRÍTICO): La Tunland E5 es de GASOLINA, NO diésel. NUNCA digas que la E5 es diésel. Si el inventario incluye un campo de combustible, úsalo. Si no tiene ese campo, NO asumas que es diésel solo por ser camión o vehículo comercial.
 
 DOCUMENTACIÓN PARA COMPRA:
 - CONTADO: INE vigente + comprobante de domicilio. Si quiere factura a su RFC, también Constancia de Situación Fiscal.
@@ -670,7 +671,7 @@ def _build_inventory_text(inventory_service) -> str:
 
         specs = []
         if combustible:
-            specs.append(combustible)
+            specs.append(f"Combustible: {combustible}")
         if motor:
             specs.append(f"Motor: {motor}")
         if capacidad:
@@ -785,7 +786,7 @@ def _build_focused_inventory_text(inventory_service, last_interest: str) -> str:
         eje_tras = _safe_get(item, ["EjeTrasera", "Eje Trasera", "ejetrasera"])
         dormitorio = _safe_get(item, ["Dormitorio", "dormitorio"])
         if combustible:
-            specs.append(combustible)
+            specs.append(f"Combustible: {combustible}")
         if motor:
             specs.append(f"Motor: {motor}")
         if capacidad:
