@@ -6,13 +6,17 @@
 
 ### Key Capabilities
 - WhatsApp customer support via Evolution API
-- AI-powered conversations using OpenAI GPT (gpt-4o-mini)
+- AI-powered conversations with Dual LLM (Gemini primary + OpenAI fallback)
 - Vehicle inventory management with Google Sheets integration
 - Lead generation and Monday.com CRM integration
 - Audio message transcription (Whisper API)
+- Image analysis via Vision API (Gemini/OpenAI)
 - Human handoff detection
 - Conversation memory with SQLite persistence
 - Photo carousel for vehicles
+- PDF sending (fichas técnicas + corridas financieras) from financing.json
+- Message accumulation (debouncing) for rapid messages
+- Facebook/Instagram referral tracking (CTWA)
 
 ## Repository Structure
 
@@ -20,17 +24,26 @@
 /home/user/tono-bot/
 ├── Dockerfile                      # Root Docker config (used by Render)
 ├── CLAUDE.md                       # This file
+├── .env.example                    # Environment variables template
+├── docs/
+│   ├── BUSINESS_LOGIC.md           # Business logic & funnel rules
+│   ├── MANUAL_INVENTARIO.md        # Inventory management guide
+│   ├── GUIA_COTIZACIONES.md        # Financing & PDF guide
+│   ├── CRM_OPERATIONS.md           # CRM operations manual
+│   ├── AI_ARCHITECTURE.md          # AI architecture & concurrency
+│   └── RUNBOOK.md                  # Troubleshooting & operations
 └── tono-bot/                       # Main application directory
     ├── Dockerfile                  # Alternative Docker config
     ├── requirements.txt            # Python dependencies
     ├── src/
-    │   ├── main.py                 # FastAPI entry point, webhooks, state management (~770 lines)
-    │   ├── conversation_logic.py   # GPT conversation handler, prompts (~880 lines)
-    │   ├── inventory_service.py    # Vehicle inventory from CSV/Google Sheets (~90 lines)
+    │   ├── main.py                 # FastAPI entry point, webhooks, debouncing, vision (~1520 lines)
+    │   ├── conversation_logic.py   # Dual LLM handler, prompts, PDF detection (~1960 lines)
+    │   ├── inventory_service.py    # Vehicle inventory from CSV/Google Sheets (~110 lines)
     │   ├── memory_store.py         # SQLite session persistence (~60 lines)
-    │   └── monday_service.py       # Monday.com CRM integration (~180 lines)
+    │   └── monday_service.py       # Monday.com CRM integration, funnel V2 (~800 lines)
     └── data/
-        └── inventory.csv           # Vehicle catalog (~37 items)
+        ├── inventory.csv           # Vehicle catalog (8 models)
+        └── financing.json          # Financing data & PDF URLs (6 models)
 ```
 
 ## Tech Stack
@@ -42,12 +55,17 @@
 | Runtime | Python 3.11 |
 | HTTP Client | httpx 0.27.2 (async) |
 | Database | SQLite via aiosqlite 0.20.0 |
-| AI | OpenAI API (gpt-4o-mini, Whisper) |
+| AI (Primary) | Google Gemini via OpenAI SDK (gemini-2.5-flash-lite) |
+| AI (Fallback) | OpenAI API (gpt-4o-mini) |
+| AI (Audio) | OpenAI Whisper API |
+| AI (Vision) | Gemini Vision / OpenAI Vision |
 | WhatsApp | Evolution API |
 | CRM | Monday.com GraphQL API |
 | Data | Pandas 2.2.3, Google Sheets CSV |
 | Config | Pydantic Settings 2.6.1 |
 | Timezone | pytz (America/Mexico_City) |
+
+> **Note:** A single OpenAI SDK (`openai==1.59.7`) handles both Gemini (via `base_url`) and OpenAI (native) clients.
 
 ## Environment Variables
 
@@ -55,20 +73,37 @@
 ```bash
 EVOLUTION_API_URL        # Evolution API endpoint
 EVOLUTION_API_KEY        # Evolution API authentication
-OPENAI_API_KEY           # OpenAI API key
+OPENAI_API_KEY           # OpenAI API key (fallback LLM + Whisper)
+GEMINI_API_KEY           # Google Gemini API key (primary LLM)
 ```
 
 ### Optional (with defaults)
 ```bash
+# --- LLM Configuration ---
+LLM_PRIMARY="gemini"                   # Primary LLM provider ("gemini" or "openai")
+OPENAI_MODEL="gemini-2.5-flash-lite"   # Primary model name (Gemini)
+OPENAI_FALLBACK_MODEL="gpt-4o-mini"    # Fallback model name (OpenAI)
+
+# --- WhatsApp & Bot ---
 EVO_INSTANCE="Maximo Cervantes 2"     # WhatsApp instance name
-OPENAI_MODEL="gpt-4o-mini"            # GPT model to use
 OWNER_PHONE=""                         # Owner's phone for alerts
+MESSAGE_ACCUMULATION_SECONDS=8.0       # Debounce window for rapid messages
+
+# --- Data Sources ---
 SHEET_CSV_URL=""                       # Google Sheets CSV URL for inventory
 INVENTORY_REFRESH_SECONDS=300          # Inventory cache TTL
 SQLITE_PATH="/app/tono-bot/db/memory.db"  # SQLite database path
+
+# --- Handoff ---
 TEAM_NUMBERS=""                        # Comma-separated handoff numbers
 AUTO_REACTIVATE_MINUTES=60             # Bot silence duration after human detection
 HUMAN_DETECTION_WINDOW_SECONDS=3       # Time window for human detection
+
+# --- Logging ---
+LOG_WEBHOOK_PAYLOAD=true               # Enable/disable webhook payload logging
+LOG_WEBHOOK_PAYLOAD_MAX_CHARS=6000     # Truncate webhook logs at N chars
+
+# --- Monday.com ---
 MONDAY_API_KEY=""                      # Monday.com API key
 MONDAY_BOARD_ID=""                     # Monday.com board ID (Leads Bot Adrian: 18396811838)
 MONDAY_DEDUPE_COLUMN_ID=""             # Monday.com dedup column (text_mkzw7xjz)
@@ -133,7 +168,7 @@ The bot automatically tracks leads through a 10-stage sales funnel in Monday.com
 | Ad Name | Text | `text_mm0wtpwb` | Future (Meta Marketing API batch enrichment from Ad ID) |
 
 ### Vehicle Dropdown Labels
-`Tunland E5`, `ESTA 6x4 11.8`, `ESTA 6x4 X13`, `Miler`, `Toano Panel`, `Tunland G7`, `Tunland G9`
+`Tunland E5`, `ESTA 6x4 11.8`, `ESTA 6x4 X13`, `Miler`, `Toano Panel`, `Tunland G7`, `Tunland G9`, `Cascadia`
 
 ### Payment Status Labels
 `De Contado`, `Financiamiento`, `Por definir`
@@ -155,28 +190,58 @@ The bot automatically tracks leads through a 10-stage sales funnel in Monday.com
 
 ## Key Architecture Patterns
 
-### 1. Async Everything
+### 1. Dual LLM with Smart Fallback
+- **Gemini** (primary): Via OpenAI SDK with `base_url=generativelanguage.googleapis.com/v1beta/openai/`
+- **OpenAI** (fallback): Native OpenAI SDK
+- **AUTO-SWITCH at startup**: Smoke test (DNS + TCP + HTTPS + API call) against Gemini; if unreachable, OpenAI becomes primary automatically
+- **Per-request fallback** (`_llm_call_with_fallback()`): 2 quick retries per provider (1s, 2s backoff), then switches to secondary
+- **IPv4 forced** on Render (Gemini sometimes fails with IPv6)
+
+### 2. Message Accumulation (Debouncing)
+- Groups rapid messages from same client into single LLM call (`MESSAGE_ACCUMULATION_SECONDS=8.0`)
+- `pending_messages[jid]`: accumulates user messages per JID
+- `pending_message_tasks[jid]`: async timer per user
+- **Drain loop**: Re-processes messages that arrive during bot thinking
+- 2+ messages combined as: `"msg1 | msg2 | msg3"`
+- **Per-JID lock** (`asyncio.Lock()`) prevents race conditions
+
+### 3. Async Everything
 All I/O operations use async/await:
 - `httpx.AsyncClient` for HTTP requests
 - `aiosqlite` for database operations
-- `AsyncOpenAI` for GPT calls
+- `AsyncOpenAI` for both Gemini and OpenAI calls
 - Background task processing for webhook responses
 
-### 2. Global State Management
+### 4. Global State Management
 `GlobalState` class in `main.py` manages runtime state:
 - HTTP client connection
 - Inventory service instance
 - SQLite memory store
 - Deduplication sets (BoundedOrderedSet with FIFO eviction)
 - User silencing for human handoff
+- Pending messages and accumulation timers
+- Pending referrals (`Dict[str, Dict[str, str]]`)
+- Per-JID processing locks
 
-### 3. Error Handling
-- Exponential backoff retry (3 attempts) for transient failures
+### 5. Error Handling
+- Exponential backoff retry (2 attempts per provider) for transient failures
 - Graceful degradation with default messages on API errors
 - Rate limit handling (429 responses)
 - Sanitized logging (no API keys in logs)
 
-### 4. Facebook Referral Tracking (CTWA)
+### 6. Image Analysis (Vision)
+- `_handle_image_analysis()` in main.py downloads image from Evolution API (base64)
+- Sends to OpenAI Vision API for analysis
+- Result injected into conversation as: `"[El cliente envió una foto que muestra: ...]"`
+- Bot responds contextually using the image description
+
+### 7. Smart Context Injection (Token Optimization)
+- **Turn 1-2**: Full inventory injected into GPT context
+- **Turn 3+**: Only focused inventory (matched model) to save tokens
+- **Financing data**: Only injected when user message contains financing keywords
+- Saves ~2000 tokens per call vs always including full inventory
+
+### 8. Facebook Referral Tracking (CTWA)
 Automatic detection of leads arriving from Facebook/Instagram ads:
 - **Baileys mode**: Extracts `contextInfo.conversionSource`, `entryPointConversionSource`, `entryPointConversionApp`
 - **Cloud API mode**: Extracts `referral` object with `source_url`, `source_id`, `ctwa_clid`, `headline`, etc.
@@ -189,7 +254,7 @@ Automatic detection of leads arriving from Facebook/Instagram ads:
 - Known Baileys limitation: `source_id` (Ad ID) is NOT available — only Cloud API provides it via `referral.source_id`
 - Campaign Name, Ad Set Name, Ad Name require Meta Marketing API batch enrichment (future feature)
 
-### 5. Human Detection
+### 9. Human Detection
 Multi-layer heuristics to detect when a human agent takes over:
 - Emoji presence in messages
 - Specific human phrases
