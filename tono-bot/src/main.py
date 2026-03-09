@@ -30,7 +30,7 @@ from src.conversation_logic import (
     _GEMINI_BASE_URL,
 )
 from src.memory_store import MemoryStore
-from src.monday_service import monday_service
+from src.monday_service import monday_service, extract_tracking_id, strip_tracking_id
 
 
 # === 1. CONFIGURACIÓN ROBUSTA (Pydantic) ===
@@ -147,6 +147,9 @@ class GlobalState:
 
         # 📢 REFERRAL TRACKING: Datos de origen de Facebook/Instagram ads
         self.pending_referrals: Dict[str, Dict[str, str]] = {}  # jid -> referral_data
+
+        # 🏷️ TRACKING ID: Internal ad attribution (Baileys workaround)
+        self.pending_tracking_ids: Dict[str, Dict[str, Any]] = {}  # jid -> tracking_data
 
         # 🔒 LOCK PER JID: Evita procesamiento concurrente para el mismo usuario
         # Sin esto, dos lotes de mensajes pueden correr en paralelo, leer contexto
@@ -687,6 +690,30 @@ async def _process_accumulated_messages(bot_state: GlobalState, remote_jid: str)
                 # Clean up pending referral if already persisted
                 bot_state.pending_referrals.pop(remote_jid, None)
 
+            # === TRACKING ID: Persistir datos de tracking en contexto de sesión ===
+            # Solo se guarda una vez (primer mensaje con tracking ID)
+            if not context.get("tracking_id"):
+                pending_track = bot_state.pending_tracking_ids.pop(remote_jid, None)
+                if pending_track:
+                    context["tracking_id"] = pending_track["tracking_id"]
+                    context["tracking_data"] = pending_track
+                    # Auto-set vehicle interest from tracking code
+                    if not context.get("last_interest"):
+                        context["last_interest"] = pending_track["vehicle_label"]
+                        logger.info(f"🏷️ Auto-interés desde tracking: {pending_track['vehicle_label']}")
+                    # Set referral source if no CTWA referral already captured
+                    if not context.get("referral_source"):
+                        context["referral_source"] = f"Ad Tracking: {pending_track['tracking_id']}"
+                    logger.info(f"🏷️ Tracking ID guardado en contexto: {pending_track['tracking_id']} → {pending_track['vehicle_label']}")
+            else:
+                # Clean up pending tracking if already persisted
+                bot_state.pending_tracking_ids.pop(remote_jid, None)
+
+            # === Strip tracking ID from message before GPT ===
+            # Prevents GPT from echoing the code in its response
+            if context.get("tracking_id"):
+                combined_message = strip_tracking_id(combined_message)
+
             # Delay humano
             await human_typing_delay()
 
@@ -782,6 +809,10 @@ async def _process_accumulated_messages(bot_state: GlobalState, remote_jid: str)
                         referral_source = result_context.get("referral_source") or context.get("referral_source") or ""
                         referral_detail = result_context.get("referral_data") or context.get("referral_data") or {}
 
+                        # Get tracking ID from context
+                        tracking_id = result_context.get("tracking_id") or context.get("tracking_id") or ""
+                        tracking_data = result_context.get("tracking_data") or context.get("tracking_data") or {}
+
                         lead_data = {
                             "telefono": remote_jid.split("@")[0],
                             "external_id": f"accumulated_{int(time.time())}",
@@ -791,6 +822,8 @@ async def _process_accumulated_messages(bot_state: GlobalState, remote_jid: str)
                             "pago": funnel_data.get("pago"),
                             "referral_source": referral_source,
                             "referral_data": referral_detail,
+                            "tracking_id": tracking_id,
+                            "tracking_data": tracking_data,
                         }
 
                         # Build referral note suffix
@@ -802,8 +835,16 @@ async def _process_accumulated_messages(bot_state: GlobalState, remote_jid: str)
                             if referral_detail.get("source_id"):
                                 referral_note += f" (ID: {referral_detail['source_id']})"
 
+                        # Build tracking ID note suffix
+                        tracking_note = ""
+                        if tracking_id:
+                            vehicle_label = tracking_data.get("vehicle_label", "")
+                            tracking_note = f"\n🏷️ Tracking: {tracking_id}"
+                            if vehicle_label:
+                                tracking_note += f" ({vehicle_label})"
+
                         stage_notes = {
-                            "1er Contacto": f"📩 Primer contacto (turno {funnel_data.get('turn_count', '?')}){referral_note}",
+                            "1er Contacto": f"📩 Primer contacto (turno {funnel_data.get('turn_count', '?')}){referral_note}{tracking_note}",
                             "Intención": f"🎯 Interesado en: {funnel_data.get('interes', 'N/A')}",
                             "Cotización": f"📄 Cotización enviada: {funnel_data.get('interes', 'N/A')}",
                             "Cita Programada": f"✅ Cita programada: {funnel_data.get('cita', 'N/A')}",
@@ -817,26 +858,36 @@ async def _process_accumulated_messages(bot_state: GlobalState, remote_jid: str)
 
                         effective_stage = funnel_stage if is_stage_change else None
                         logger.info(f"📊 FUNNEL V2 [{funnel_stage}]: {lead_data.get('telefono')} - nombre={current_name} - {lead_data.get('interes')}")
-                        await monday_service.create_or_update_lead(lead_data, stage=effective_stage, add_note=note)
+                        monday_item_id = await monday_service.create_or_update_lead(lead_data, stage=effective_stage, add_note=note)
+
+                        # V3: Connect lead to Anuncio board item if tracking ID exists
+                        if monday_item_id and tracking_id:
+                            try:
+                                anuncio = await monday_service.find_anuncio_by_tracking_id(tracking_id)
+                                if anuncio:
+                                    await monday_service.connect_lead_to_anuncio(monday_item_id, anuncio["id"])
+                            except Exception as e:
+                                logger.error(f"⚠️ Error conectando lead a anuncio: {e}")
 
                 except Exception as e:
                     logger.error(f"❌ Error actualizando funnel en Monday: {e}")
 
             # Lead calificado - notificar
-            # Get referral source for alerts
+            # Get referral source and tracking ID for alerts
             result_ctx = result.get("context", context) or {}
             alert_referral = result_ctx.get("referral_source") or context.get("referral_source") or ""
+            alert_tracking = result_ctx.get("tracking_id") or context.get("tracking_id") or ""
 
             if lead_info:
                 try:
                     lead_key = f"{remote_jid}|lead"
                     if lead_key not in bot_state.processed_lead_ids:
                         bot_state.processed_lead_ids.add(lead_key)
-                        await notify_owner(bot_state, remote_jid, combined_message, reply_text, is_lead=True, referral_source=alert_referral)
+                        await notify_owner(bot_state, remote_jid, combined_message, reply_text, is_lead=True, referral_source=alert_referral, tracking_id=alert_tracking)
                 except Exception as e:
                     logger.error(f"❌ Error procesando LEAD calificado: {e}")
             else:
-                await notify_owner(bot_state, remote_jid, combined_message, reply_text, is_lead=False, referral_source=alert_referral)
+                await notify_owner(bot_state, remote_jid, combined_message, reply_text, is_lead=False, referral_source=alert_referral, tracking_id=alert_tracking)
 
 
 async def _schedule_accumulated_processing(bot_state: GlobalState, remote_jid: str):
@@ -1302,7 +1353,7 @@ async def send_evolution_document(bot_state: GlobalState, number_or_jid: str, te
 
 
 # === 9. ALERTAS AL DUEÑO ===
-async def notify_owner(bot_state: GlobalState, user_number_or_jid: str, user_message: str, bot_reply: str, is_lead: bool = False, referral_source: str = ""):
+async def notify_owner(bot_state: GlobalState, user_number_or_jid: str, user_message: str, bot_reply: str, is_lead: bool = False, referral_source: str = "", tracking_id: str = ""):
     if not settings.OWNER_PHONE:
         return
 
@@ -1316,6 +1367,8 @@ async def notify_owner(bot_state: GlobalState, user_number_or_jid: str, user_mes
         )
         if referral_source:
             alert_text += f"\nOrigen: {referral_source}"
+        if tracking_id:
+            alert_text += f"\nTracking: {tracking_id}"
         await send_evolution_message(bot_state, settings.OWNER_PHONE, alert_text)
         return
 
@@ -1336,6 +1389,8 @@ async def notify_owner(bot_state: GlobalState, user_number_or_jid: str, user_mes
     )
     if referral_source:
         alert_text += f"\nOrigen: {referral_source}"
+    if tracking_id:
+        alert_text += f"\nTracking: {tracking_id}"
     await send_evolution_message(bot_state, settings.OWNER_PHONE, alert_text)
 
 
@@ -1435,6 +1490,14 @@ async def process_single_event(bot_state: GlobalState, data: Dict[str, Any]):
 
     if not user_message:
         return
+
+    # === TRACKING ID DETECTION (V3: Internal ad attribution) ===
+    # Detect tracking ID pattern (e.g., TG9-A1) in the first message
+    if remote_jid not in bot_state.pending_tracking_ids:
+        tracking_data = extract_tracking_id(user_message)
+        if tracking_data:
+            bot_state.pending_tracking_ids[remote_jid] = tracking_data
+            logger.info(f"🏷️ Tracking ID capturado para {remote_jid}: {tracking_data['tracking_id']} → {tracking_data['vehicle_label']}")
 
     # === ACUMULACIÓN DE MENSAJES RÁPIDOS ===
     # En lugar de procesar inmediatamente, acumulamos y esperamos

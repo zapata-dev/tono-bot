@@ -128,6 +128,10 @@ MONDAY_CTWA_CLID_COLUMN_ID=""         # Monday.com CTWA Click ID column - TEXT t
 MONDAY_CAMPAIGN_NAME_COLUMN_ID=""      # Monday.com Campaign Name column - TEXT type (text_mm0w77pn)
 MONDAY_ADSET_NAME_COLUMN_ID=""         # Monday.com Ad Set Name column - TEXT type (text_mm0wtebg)
 MONDAY_AD_NAME_COLUMN_ID=""            # Monday.com Ad Name column - TEXT type (text_mm0wtpwb)
+MONDAY_TRACKING_ID_COLUMN_ID=""        # Monday.com Tracking ID column on Leads board - TEXT type
+MONDAY_ADS_BOARD_ID=""                 # Monday.com Anuncios board ID
+MONDAY_ADS_TRACKING_COLUMN_ID=""       # Monday.com Tracking ID column on Anuncios board - TEXT type
+MONDAY_LEADS_CONNECT_ADS_COLUMN_ID=""  # Monday.com Connect Boards column linking Leads → Anuncios
 ```
 
 ## Sales Funnel System (V2)
@@ -192,6 +196,55 @@ The bot automatically tracks leads through a 10-stage sales funnel in Monday.com
 - **Estado column** (STATUS, ID: `status`): Labels listed in funnel table above
 - **Groups**: Auto-created by month (e.g., "FEBRERO 2026")
 - Set all `MONDAY_*` env vars in Render (see Environment Variables section)
+
+## Ad Attribution System (V3 - Tracking ID)
+
+Since Baileys/Evolution API does NOT provide Meta Ads metadata reliably, the bot uses an internal Tracking ID system for ad attribution.
+
+### Tracking ID Format
+`<MODEL_CODE>-A<NUMBER>` — Embedded in pre-filled WhatsApp ad messages.
+
+### Model Code Map
+| Code | Vehicle |
+|------|---------|
+| `TG7` | Tunland G7 |
+| `TG9` | Tunland G9 |
+| `TE5` | Tunland E5 |
+| `ML` | Miler |
+| `TP` | Toano Panel |
+| `E11` | ESTA 6x4 11.8 |
+| `EX` | ESTA 6x4 X13 |
+| `CA` | Cascadia |
+
+Examples: `TG9-A1` (Tunland G9, Ad #1), `ML-A2` (Miler, Ad #2)
+
+### How It Works
+1. Facebook/Instagram ad has pre-filled message: "Hola, me interesa TG9-A1"
+2. Bot detects pattern `[A-Z][A-Z0-9]{1,3}-A\d{1,3}` in first message
+3. Model auto-resolved → `last_interest` set to "Tunland G9"
+4. Tracking ID stripped from message before GPT processing
+5. GPT receives tracking context: "Este cliente llegó por anuncio de Tunland G9"
+6. Lead created in Monday.com with tracking_id column populated
+7. Lead linked to Anuncio item via Connect Boards column
+8. Owner alert includes tracking ID
+
+### Monday.com Anuncios Board
+Separate board for cataloging active ads:
+- **Tracking ID** (Text, unique key): `TG9-A1`
+- **Modelo** (Dropdown): Same labels as Leads board vehicle dropdown
+- **Campaign Name** (Text): Facebook campaign name
+- **Canal** (Status): Facebook / Instagram
+- **Activo** (Checkbox): Whether ad is currently running
+
+### Leads Board New Columns
+- **Tracking ID** (Text): Stores detected tracking code
+- **Anuncio** (Connect Boards): Links to Anuncios board item
+
+### Tracking ID vs CTWA Referral
+- Tracking ID works with **Baileys** (no Meta API needed)
+- CTWA referral requires Meta Cloud API (partially available with Baileys `conversionData`)
+- Both systems coexist: if a lead has CTWA data AND a tracking ID, both are stored
+- If only tracking ID exists (no CTWA), `referral_source` is set to `"Ad Tracking: TG9-A1"`
 
 ## Key Architecture Patterns
 
@@ -378,6 +431,8 @@ curl http://localhost:8080/health
 7. **Rate Limiting**: Respect 429 responses with exponential backoff
 
 8. **Facebook Referral Tracking**: CTWA referral data extracted from first message webhook, persisted in session context, and sent to Monday.com source column. Supports both Baileys (`contextInfo`) and Cloud API (`referral` object) formats.
+
+9. **Ad Tracking ID (V3)**: Internal attribution system detecting `<MODEL_CODE>-A<NUMBER>` pattern in first message. Auto-resolves vehicle model, strips code before GPT, persists in context, populates Monday.com Tracking ID column, and connects lead to Anuncios board.
 
 ## Testing
 

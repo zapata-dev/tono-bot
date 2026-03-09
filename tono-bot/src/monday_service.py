@@ -46,6 +46,63 @@ VEHICLE_DROPDOWN_MAP = {
 
 
 # ============================================================
+# V3: TRACKING ID → Internal ad attribution (Baileys workaround)
+# ============================================================
+# Format: <MODEL_CODE>-A<NUMBER> (e.g., TG9-A1 = Tunland G9, Ad 1)
+MODEL_CODE_MAP = {
+    "TG7": "Tunland G7",
+    "TG9": "Tunland G9",
+    "TE5": "Tunland E5",
+    "ML":  "Miler",
+    "TP":  "Toano Panel",
+    "E11": "ESTA 6x4 11.8",
+    "EX":  "ESTA 6x4 X13",
+    "CA":  "Cascadia",
+}
+
+TRACKING_ID_PATTERN = re.compile(r'\b([A-Z][A-Z0-9]{1,3})-A(\d{1,3})\b', re.IGNORECASE)
+
+
+def extract_tracking_id(text: str) -> dict | None:
+    """
+    Detects a tracking ID pattern in the message text.
+    Returns dict with tracking_id, model_code, ad_number, vehicle_label or None.
+    """
+    if not text:
+        return None
+
+    m = TRACKING_ID_PATTERN.search(text)
+    if not m:
+        return None
+
+    model_code = m.group(1).upper()
+    ad_number = int(m.group(2))
+    vehicle_label = MODEL_CODE_MAP.get(model_code)
+
+    if not vehicle_label:
+        return None
+
+    tracking_id = f"{model_code}-A{ad_number}"
+    return {
+        "tracking_id": tracking_id,
+        "model_code": model_code,
+        "ad_number": ad_number,
+        "vehicle_label": vehicle_label,
+    }
+
+
+def strip_tracking_id(text: str) -> str:
+    """
+    Removes the tracking ID from the message text.
+    If the result is empty/whitespace, returns 'Hola'.
+    """
+    cleaned = TRACKING_ID_PATTERN.sub("", text).strip()
+    # Collapse multiple spaces
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    return cleaned if cleaned else "Hola"
+
+
+# ============================================================
 # V2.1: REFERRAL → Granular Monday column helpers
 # ============================================================
 def _resolve_channel_label(referral_data: dict) -> str:
@@ -320,6 +377,12 @@ class MondayService:
         self.adset_name_col_id = os.getenv("MONDAY_ADSET_NAME_COLUMN_ID")
         self.ad_name_col_id = os.getenv("MONDAY_AD_NAME_COLUMN_ID")
 
+        # --- V3: Tracking ID / Anuncios Board ---
+        self.tracking_id_col_id = os.getenv("MONDAY_TRACKING_ID_COLUMN_ID")
+        self.ads_board_id = os.getenv("MONDAY_ADS_BOARD_ID")
+        self.ads_tracking_col_id = os.getenv("MONDAY_ADS_TRACKING_COLUMN_ID")
+        self.leads_connect_ads_col_id = os.getenv("MONDAY_LEADS_CONNECT_ADS_COLUMN_ID")
+
         # Log config
         if self.stage_col_id:
             logger.info(f"✅ Monday Stage Column: {self.stage_col_id}")
@@ -339,6 +402,8 @@ class MondayService:
             "campaign_name": self.campaign_name_col_id,
             "adset_name": self.adset_name_col_id,
             "ad_name": self.ad_name_col_id,
+            "tracking_id": self.tracking_id_col_id,
+            "ads_board": self.ads_board_id,
         }
         configured = {k: v for k, v in v2_cols.items() if v}
         if configured:
@@ -624,6 +689,12 @@ class MondayService:
             if ad_name:
                 col_vals[self.ad_name_col_id] = ad_name
 
+        # --- V3: Tracking ID (Text) ---
+        if self.tracking_id_col_id:
+            tracking_id = (lead_data.get("tracking_id") or "").strip()
+            if tracking_id:
+                col_vals[self.tracking_id_col_id] = tracking_id
+
         return col_vals
 
     async def create_or_update_lead(self, lead_data: dict, stage: str = None, add_note: str = None):
@@ -781,6 +852,15 @@ class MondayService:
                         detalles += f"🔗 Ad ID: {referral_detail['source_id']}\n"
                     if referral_detail.get('ctwa_clid'):
                         detalles += f"🆔 CTWA Click ID: {referral_detail['ctwa_clid']}\n"
+                # Tracking ID attribution
+                tracking_id = lead_data.get('tracking_id', '')
+                if tracking_id:
+                    tracking_data = lead_data.get('tracking_data') or {}
+                    vehicle = tracking_data.get('vehicle_label', '')
+                    detalles += f"🏷️ Tracking ID: {tracking_id}"
+                    if vehicle:
+                        detalles += f" ({vehicle})"
+                    detalles += "\n"
             else:
                 detalles = add_note or f"📊 Actualizado a etapa: {effective_stage}"
 
@@ -792,6 +872,76 @@ class MondayService:
             await self._graphql(query_note, {"item_id": int(item_id), "body": detalles})
 
         return item_id
+
+    # ============================================================
+    # V3: ANUNCIOS BOARD - Tracking ID lookup + Connect Boards
+    # ============================================================
+    async def find_anuncio_by_tracking_id(self, tracking_id: str) -> dict | None:
+        """
+        Searches the Anuncios board for an item matching the tracking_id.
+        Returns dict with 'id' and 'name', or None.
+        """
+        if not self.ads_board_id or not self.ads_tracking_col_id or not tracking_id:
+            return None
+
+        query = """
+        query ($board_id: ID!, $col_id: String!, $val: String!) {
+          items_page_by_column_values(
+            limit: 1,
+            board_id: $board_id,
+            columns: [{column_id: $col_id, column_values: [$val]}]
+          ) {
+            items {
+              id
+              name
+            }
+          }
+        }
+        """
+        variables = {
+            "board_id": int(self.ads_board_id),
+            "col_id": self.ads_tracking_col_id,
+            "val": tracking_id.upper(),
+        }
+
+        try:
+            data = await self._graphql(query, variables)
+            items = data.get("data", {}).get("items_page_by_column_values", {}).get("items", [])
+            if items:
+                logger.info(f"🏷️ Anuncio encontrado: {items[0]['name']} (ID: {items[0]['id']}) para tracking_id={tracking_id}")
+                return {"id": items[0]["id"], "name": items[0].get("name", "")}
+        except Exception as e:
+            logger.error(f"⚠️ Error buscando anuncio por tracking_id={tracking_id}: {e}")
+
+        return None
+
+    async def connect_lead_to_anuncio(self, lead_item_id: str, anuncio_item_id: str):
+        """
+        Connects a lead item to an anuncio item via Connect Boards column.
+        """
+        if not self.leads_connect_ads_col_id or not lead_item_id or not anuncio_item_id:
+            return
+
+        query = """
+        mutation ($board_id: ID!, $item_id: ID!, $col_id: String!, $value: JSON!) {
+            change_multiple_column_values(board_id: $board_id, item_id: $item_id, column_values: $value) { id }
+        }
+        """
+        col_vals = {
+            self.leads_connect_ads_col_id: {"linkedPulseIds": [{"linkedPulseId": int(anuncio_item_id)}]}
+        }
+        variables = {
+            "board_id": int(self.board_id),
+            "item_id": int(lead_item_id),
+            "col_id": self.leads_connect_ads_col_id,
+            "value": json.dumps(col_vals),
+        }
+
+        try:
+            await self._graphql(query, variables)
+            logger.info(f"🔗 Lead {lead_item_id} vinculado a Anuncio {anuncio_item_id}")
+        except Exception as e:
+            logger.error(f"⚠️ Error vinculando lead a anuncio: {e}")
 
 
 # Instancia lista para usar
