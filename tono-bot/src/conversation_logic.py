@@ -91,7 +91,7 @@ INFORMACIÓN DEL DISTRIBUIDOR:
 - SERVICIO: El cliente puede hacer mantenimiento en cualquier distribuidor autorizado de la marca correspondiente sin perder garantía.
 - TIPO DE CABINA Y ASIENTOS: Consulta el inventario, cada modelo indica su tipo de cabina y número de asientos.
 - SPECS TÉCNICAS: Algunos modelos incluyen Transmisión, Paso, Rodada, Eje Delantera, Eje Trasera y Dormitorio. Si el cliente pregunta por alguna de estas características, consulta el inventario.
-- COMBUSTIBLE (CRÍTICO): La Tunland E5 es de GASOLINA, NO diésel. NUNCA digas que la E5 es diésel. Si el inventario incluye un campo de combustible, úsalo. Si no tiene ese campo, NO asumas que es diésel solo por ser camión o vehículo comercial.
+- COMBUSTIBLE (CRÍTICO): Si el inventario incluye un campo de combustible, úsalo SIEMPRE. NO asumas que un vehículo es diésel solo por ser camión o vehículo comercial. Algunos modelos son de GASOLINA. Usa el dato del inventario.
 
 DOCUMENTACIÓN PARA COMPRA:
 - CONTADO: INE vigente + comprobante de domicilio. Si quiere factura a su RFC, también Constancia de Situación Fiscal.
@@ -107,22 +107,23 @@ REGLAS OBLIGATORIAS:
 - Si el cliente pregunta por un vehículo: búscalo en INVENTARIO DISPONIBLE. Si está ahí → "Sí lo manejamos." Si no está → "Por el momento no tenemos esa unidad, pero tenemos estas opciones:" y lista lo que SÍ tenemos.
 - SIEMPRE ofrece lo que SÍ está en inventario cuando el cliente pregunta por algo que no tenemos.
 - ANTI-ALUCINACIÓN (CRÍTICO): NUNCA menciones marcas ni modelos que NO aparezcan en INVENTARIO DISPONIBLE. Si el cliente pide "Frontier", "NP300", "JAC", "Hilux" u otro vehículo que NO está en el inventario, NO digas "tenemos la JAC T6" ni inventes modelos. Solo menciona EXACTAMENTE los modelos que están en el INVENTARIO. Si inventas un vehículo que no existe, el cliente vendrá a buscarlo y se irá enojado.
-- Ejemplo CORRECTO: Cliente: "Tienen Frontier?" → "Por el momento no manejamos Frontier. Tenemos la FOTON TUNLAND G7 y G9 que son pickups doble cabina. Te doy información?"
+- Ejemplo CORRECTO: Cliente: "Tienen Frontier?" → "Por el momento no manejamos Frontier." y luego ofreces los modelos que SÍ aparecen en INVENTARIO DISPONIBLE.
 - Ejemplo INCORRECTO: Cliente: "Tienen JAC?" → "Sí, tenemos la JAC T6." (PROHIBIDO - inventar modelos que no están en inventario)
+- IMPORTANTE: Los ejemplos en este prompt pueden mencionar modelos para ilustrar. Pero SIEMPRE verifica contra el INVENTARIO DISPONIBLE antes de mencionarlos. Si un modelo aparece como ejemplo aquí pero NO está en el inventario, NO lo menciones al cliente.
 
 0.6) TRACCIÓN — 4x2 vs 4x4 vs 6x4 (CRÍTICO):
 - Cada vehículo del inventario tiene su tracción indicada (4x2, 4x4, 6x4). USA EXACTAMENTE la que dice el inventario.
 - NUNCA digas que un vehículo es 4x4 si en el inventario dice 4x2, ni viceversa.
 - Si el cliente pregunta "¿es 4x4?" → revisa el campo Tracción del inventario y responde con el dato exacto.
 - Si el cliente busca específicamente 4x4, muestra SOLO las unidades que dicen 4x4 en el inventario.
-- Ejemplo: La Tunland G9 es 4x4. La Miler es 4x2. No los confundas.
+- Ejemplo: Revisa el campo Tracción de cada unidad. No confundas 4x2 con 4x4.
 
 0.5) INTERPRETACIÓN COMERCIAL — CARGA vs. PASAJEROS (CRÍTICO):
 - Cuando el cliente pregunte por "asientos", "pasajeros", "cuántos caben", "de cuántos es", "bancas", "filas de asientos", "para personal", "transporte de personal" o "es panel o van":
   → ESTÁ PREGUNTANDO si la unidad es versión de PASAJEROS o de CARGA. NO pregunta si existen asientos físicos en la cabina (eso es obvio, toda unidad tiene asientos de cabina).
 - AL PRESENTAR UNA UNIDAD POR PRIMERA VEZ, SIEMPRE indica su tipo de uso:
-  CORRECTO: "La FOTON TOANO PANEL 2025 es una van de CARGA, cuenta con 3 asientos en cabina."
-  INCORRECTO: "La FOTON TOANO PANEL 2025 tiene 3 asientos." (no aclara que es de carga, induce confusión)
+  CORRECTO: "La [MODELO] es una van de CARGA, cuenta con [X] asientos en cabina."
+  INCORRECTO: "La [MODELO] tiene [X] asientos." (no aclara que es de carga, induce confusión)
 - SI LA UNIDAD ES DE CARGA (Panel, Chasis, Tractocamión) y el cliente pregunta por asientos/pasajeros:
   1. Aclara inmediatamente: "La [MODELO] es versión de carga. Cuenta con [X] asientos en cabina (conductor + acompañantes), pero la zona trasera es exclusivamente para carga."
   2. Pregunta: "¿Estás buscando una unidad para transporte de pasajeros?"
@@ -162,7 +163,7 @@ REGLAS OBLIGATORIAS:
 - NO digas "soy IA", "soy bot", "soy asistente virtual".
 
 4) CANDADO DE MODELO (CRÍTICO):
-- Si ya se detectó un modelo en la conversación (ej. Tunland G9 2025), NO cambies a otro modelo sin que el cliente lo pida explícitamente.
+- Si ya se detectó un modelo en la conversación, NO cambies a otro modelo sin que el cliente lo pida explícitamente.
 - Si el cliente menciona otro modelo, pregunta: "¿Te refieres a la [modelo nuevo] o seguimos con la [modelo anterior]?"
 - NUNCA mezcles información de dos modelos diferentes en la misma respuesta.
 
@@ -188,7 +189,7 @@ REGLAS OBLIGATORIAS:
 8) FINANCIAMIENTO (REGLAS DE ORO):
 - PRIMERO revisa el campo "Financiamiento" de la unidad en el INVENTARIO.
 - Si dice "No" → NO ofrezcas financiamiento para ESA unidad. Di: "Esa unidad se maneja solo de contado." NO des enganche, mensualidades ni corrida para ella.
-  * SÉ PROACTIVO: Inmediatamente después, revisa el INVENTARIO y menciona qué otras unidades SÍ tienen financiamiento disponible. Ejemplo: "Esa unidad se maneja solo de contado. Si te interesa financiamiento, tenemos la Tunland G9, la Tunland E5 y la ESTA 6x4 que sí lo manejan. Te doy info de alguna?"
+  * SÉ PROACTIVO: Inmediatamente después, revisa el INVENTARIO y menciona qué otras unidades SÍ tienen financiamiento disponible. Ejemplo: "Esa unidad se maneja solo de contado. Si te interesa financiamiento, tenemos [modelos del INVENTARIO que sí lo manejan]. Te doy info de alguna?"
   * Si el cliente pide ver otras opciones con financiamiento, muéstrale las unidades disponibles con sus precios.
   * NUNCA te quedes solo repitiendo "solo de contado" sin ofrecer alternativas.
 - SOLO si el campo dice "Sí" o no tiene valor (vacío) → puedes dar info de financiamiento.
@@ -248,14 +249,21 @@ REGLAS OBLIGATORIAS:
 {{
   "lead_event": {{
     "nombre": "Juan Perez",
-    "interes": "Tunland G9 2025",
+    "interes": "[modelo del inventario]",
     "cita": "Lunes 10 AM",
     "pago": "Contado"
   }}
 }}
 ```
 
-15) PROHIBIDO:
+15) TOMA A CUENTA / TRADE-IN:
+- Si el cliente pregunta si reciben su vehículo actual a cuenta, en intercambio, o como enganche:
+  Responde: "Claro, sí podemos revisar tu unidad como parte del trato. Te recomiendo agendar una cita para que un asesor evalúe tu vehículo directamente. Te doy más detalles de la unidad que te interesa?"
+- NO prometas montos de avalúo ni valores de intercambio. Eso lo define el asesor en persona.
+- NO ignores la pregunta de trade-in. Siempre reconócela y responde.
+- Si el cliente menciona su vehículo actual (ej. "tengo un Nissan 2016", "mi carro es un Aveo"), ESE es el vehículo DEL CLIENTE, NO un vehículo de nuestro inventario. No confundas la marca/modelo/año del vehículo del cliente con los vehículos que vendemos.
+
+16) PROHIBIDO:
 - Emojis
 - Explicaciones largas
 - INVENTAR VEHÍCULOS: NUNCA menciones marcas o modelos que NO estén en INVENTARIO DISPONIBLE (ej: JAC, Nissan, Toyota, Hino, International, Kenworth, etc. a menos que aparezcan en el inventario)
@@ -1086,8 +1094,21 @@ def _extract_interest_from_messages(user_message: str, reply: str, inventory_ser
     best_score = 0
     best_anio: str = ""
 
-    # Detect year mentioned in user message (e.g. "ESTA 2023")
-    year_in_msg = re.search(r'\b(20\d{2})\b', msg_norm)
+    # Strip trade-in / customer's own vehicle context before extracting year
+    # Phrases like "mi carro X 2016", "tengo un Nissan 2018", "recibirían mi auto 2020"
+    # contain years that belong to the customer's car, not our inventory
+    _tradein_patterns = [
+        r"(?:recib[ií]r[ií]an|aceptan|toman|reciben)\s+mi\s+\w+[\w\s]*?\d{4}",
+        r"mi\s+(?:carro|auto|coche|camioneta|vehiculo|vehículo|unidad|pickup|troca)\s+[\w\s]*?\d{4}",
+        r"tengo\s+(?:un|una|mi)\s+[\w\s]*?\d{4}",
+        r"(?:doy|dejo|entrego)\s+(?:mi|un|una)\s+[\w\s]*?\d{4}",
+    ]
+    msg_for_year = msg_norm
+    for tp in _tradein_patterns:
+        msg_for_year = re.sub(tp, "", msg_for_year, flags=re.IGNORECASE)
+
+    # Detect year mentioned in user message (e.g. "ESTA 2023"), excluding trade-in context
+    year_in_msg = re.search(r'\b(20\d{2})\b', msg_for_year)
 
     for item in items:
         modelo = _safe_get(item, ["Modelo", "modelo", "id_modelo"]).strip()
@@ -1742,6 +1763,37 @@ async def handle_message(
                 "Ejemplo: 'Con gusto, ¿con quién tengo el gusto?' ***"
             )
 
+    # Build ad context section if referral has externalAdReply info
+    ad_context_section = ""
+    referral_data = context.get("referral_data") or {}
+    if referral_data and turn_count <= 3:
+        ad_reply_raw = referral_data.get("externalAdReply", "")
+        if ad_reply_raw:
+            # Parse externalAdReply dict if it was stored as string repr
+            ad_title = ""
+            ad_body = ""
+            if isinstance(ad_reply_raw, dict):
+                ad_title = ad_reply_raw.get("title", "")
+                ad_body = ad_reply_raw.get("body", "")
+            elif isinstance(ad_reply_raw, str):
+                # Try to extract title and body from string representation
+                import ast
+                try:
+                    ad_dict = ast.literal_eval(ad_reply_raw)
+                    if isinstance(ad_dict, dict):
+                        ad_title = ad_dict.get("title", "")
+                        ad_body = ad_dict.get("body", "")
+                except (ValueError, SyntaxError):
+                    pass
+            if ad_title or ad_body:
+                ad_context_section = (
+                    f"CONTEXTO DEL ANUNCIO (el cliente llegó por este anuncio de Facebook/Instagram):\n"
+                    f"  Título: {ad_title}\n"
+                    f"  Descripción: {ad_body}\n"
+                    f"  IMPORTANTE: Usa este contexto para entender qué vehículo le interesa al cliente. "
+                    f"Si el anuncio menciona un vehículo específico, ESE es probablemente el vehículo de interés del cliente.\n"
+                )
+
     context_block = (
         f"TURNO: {turn_count} {'(PRIMER MENSAJE - puedes saludar)' if turn_count == 1 else '(NO saludes, ve directo al punto)'}\n"
         f"MOMENTO ACTUAL: {current_time_str}\n"
@@ -1749,6 +1801,7 @@ async def handle_message(
         f"INTERÉS DETECTADO: {last_interest or '(Sin modelo)'}\n"
         f"CITA DETECTADA: {last_appointment or '(Sin cita)'}\n"
         f"PAGO DETECTADO: {last_payment or '(Por definir)'}\n"
+        f"{ad_context_section}"
         f"{inventory_section}"
         f"{financing_section}"
         f"HISTORIAL DE CHAT:\n{history[-3000:]}"
