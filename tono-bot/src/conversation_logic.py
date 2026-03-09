@@ -118,6 +118,15 @@ REGLAS OBLIGATORIAS:
 - Si el cliente busca específicamente 4x4, muestra SOLO las unidades que dicen 4x4 en el inventario.
 - Ejemplo: Revisa el campo Tracción de cada unidad. No confundas 4x2 con 4x4.
 
+0.7) UNIDADES DEMO Y SEMINUEVO:
+- Algunas unidades están marcadas como [DEMO] o [SEMINUEVO] en el inventario.
+- [DEMO]: Unidades que se usaron para pruebas de manejo o demostraciones. Pueden tener más kilómetros que una nueva pero están en buenas condiciones y tienen un precio más accesible.
+- [SEMINUEVO]: Unidades usadas/de segunda mano. Pueden tener más kilómetros y desgaste normal por uso, pero están revisadas y tienen un precio más accesible que una nueva.
+- SIEMPRE menciona la condición cuando ofrezcas la unidad. Ejemplo: "Tenemos una Tunland E5 demo a $249,000." o "Tenemos una Cascadia seminuevo a $X."
+- Si el cliente pregunta por la condición, explica con transparencia según el tipo (demo o seminuevo).
+- NUNCA ocultes la condición de una unidad. La transparencia genera confianza.
+- Si hay unidades nuevas, demo Y/O seminuevo del mismo modelo, presenta todas las opciones para que el cliente elija.
+
 0.5) INTERPRETACIÓN COMERCIAL — CARGA vs. PASAJEROS (CRÍTICO):
 - Cuando el cliente pregunte por "asientos", "pasajeros", "cuántos caben", "de cuántos es", "bancas", "filas de asientos", "para personal", "transporte de personal" o "es panel o van":
   → ESTÁ PREGUNTANDO si la unidad es versión de PASAJEROS o de CARGA. NO pregunta si existen asientos físicos en la cabina (eso es obvio, toda unidad tiene asientos de cabina).
@@ -619,9 +628,16 @@ def _build_inventory_text(inventory_service) -> str:
         cantidad = _safe_get(item, ["Cantidad", "cantidad"], default="1")
         colores = _safe_get(item, ["Colores", "colores"], default="")
 
+        condicion = _safe_get(item, ["condicion", "Condicion", "Condición"])
+
         price_str = _format_price(precio, moneda, iva)
         label = f"{marca} {modelo}".strip() if marca else modelo
         info = f"- {label} {anio}: {price_str}"
+
+        if condicion and condicion.strip().lower() == "demo":
+            info += " [DEMO]"
+        elif condicion and condicion.strip().lower() == "seminuevo":
+            info += " [SEMINUEVO]"
 
         try:
             cant = int(cantidad)
@@ -755,9 +771,15 @@ def _build_focused_inventory_text(inventory_service, last_interest: str) -> str:
         moneda = _safe_get(item, ["moneda"], default="MXN")
         iva = _safe_get(item, ["iva_incluido"], default="")
         marca = _safe_get(item, ["Marca", "marca"])
+        condicion = _safe_get(item, ["condicion", "Condicion", "Condición"])
         price_str = _format_price(precio, moneda, iva)
         label = f"{marca} {modelo}".strip() if marca else modelo
         info = f"Modelo de interés: {label} {anio}: {price_str}"
+
+        if condicion and condicion.strip().lower() == "demo":
+            info += " [DEMO]"
+        elif condicion and condicion.strip().lower() == "seminuevo":
+            info += " [SEMINUEVO]"
 
         # Tipo de uso: CARGA vs PASAJEROS
         modelo_lower = modelo.lower()
