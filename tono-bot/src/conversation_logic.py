@@ -255,7 +255,14 @@ REGLAS OBLIGATORIAS:
 }}
 ```
 
-15) PROHIBIDO:
+15) TOMA A CUENTA / TRADE-IN:
+- Si el cliente pregunta si reciben su vehículo actual a cuenta, en intercambio, o como enganche:
+  Responde: "Claro, sí podemos revisar tu unidad como parte del trato. Te recomiendo agendar una cita para que un asesor evalúe tu vehículo directamente. Te doy más detalles de la unidad que te interesa?"
+- NO prometas montos de avalúo ni valores de intercambio. Eso lo define el asesor en persona.
+- NO ignores la pregunta de trade-in. Siempre reconócela y responde.
+- Si el cliente menciona su vehículo actual (ej. "tengo un Nissan 2016", "mi carro es un Aveo"), ESE es el vehículo DEL CLIENTE, NO un vehículo de nuestro inventario. No confundas la marca/modelo/año del vehículo del cliente con los vehículos que vendemos.
+
+16) PROHIBIDO:
 - Emojis
 - Explicaciones largas
 - INVENTAR VEHÍCULOS: NUNCA menciones marcas o modelos que NO estén en INVENTARIO DISPONIBLE (ej: JAC, Nissan, Toyota, Hino, International, Kenworth, etc. a menos que aparezcan en el inventario)
@@ -1086,8 +1093,21 @@ def _extract_interest_from_messages(user_message: str, reply: str, inventory_ser
     best_score = 0
     best_anio: str = ""
 
-    # Detect year mentioned in user message (e.g. "ESTA 2023")
-    year_in_msg = re.search(r'\b(20\d{2})\b', msg_norm)
+    # Strip trade-in / customer's own vehicle context before extracting year
+    # Phrases like "mi carro X 2016", "tengo un Nissan 2018", "recibirían mi auto 2020"
+    # contain years that belong to the customer's car, not our inventory
+    _tradein_patterns = [
+        r"(?:recib[ií]r[ií]an|aceptan|toman|reciben)\s+mi\s+\w+[\w\s]*?\d{4}",
+        r"mi\s+(?:carro|auto|coche|camioneta|vehiculo|vehículo|unidad|pickup|troca)\s+[\w\s]*?\d{4}",
+        r"tengo\s+(?:un|una|mi)\s+[\w\s]*?\d{4}",
+        r"(?:doy|dejo|entrego)\s+(?:mi|un|una)\s+[\w\s]*?\d{4}",
+    ]
+    msg_for_year = msg_norm
+    for tp in _tradein_patterns:
+        msg_for_year = re.sub(tp, "", msg_for_year, flags=re.IGNORECASE)
+
+    # Detect year mentioned in user message (e.g. "ESTA 2023"), excluding trade-in context
+    year_in_msg = re.search(r'\b(20\d{2})\b', msg_for_year)
 
     for item in items:
         modelo = _safe_get(item, ["Modelo", "modelo", "id_modelo"]).strip()
@@ -1742,6 +1762,37 @@ async def handle_message(
                 "Ejemplo: 'Con gusto, ¿con quién tengo el gusto?' ***"
             )
 
+    # Build ad context section if referral has externalAdReply info
+    ad_context_section = ""
+    referral_data = context.get("referral_data") or {}
+    if referral_data and turn_count <= 3:
+        ad_reply_raw = referral_data.get("externalAdReply", "")
+        if ad_reply_raw:
+            # Parse externalAdReply dict if it was stored as string repr
+            ad_title = ""
+            ad_body = ""
+            if isinstance(ad_reply_raw, dict):
+                ad_title = ad_reply_raw.get("title", "")
+                ad_body = ad_reply_raw.get("body", "")
+            elif isinstance(ad_reply_raw, str):
+                # Try to extract title and body from string representation
+                import ast
+                try:
+                    ad_dict = ast.literal_eval(ad_reply_raw)
+                    if isinstance(ad_dict, dict):
+                        ad_title = ad_dict.get("title", "")
+                        ad_body = ad_dict.get("body", "")
+                except (ValueError, SyntaxError):
+                    pass
+            if ad_title or ad_body:
+                ad_context_section = (
+                    f"CONTEXTO DEL ANUNCIO (el cliente llegó por este anuncio de Facebook/Instagram):\n"
+                    f"  Título: {ad_title}\n"
+                    f"  Descripción: {ad_body}\n"
+                    f"  IMPORTANTE: Usa este contexto para entender qué vehículo le interesa al cliente. "
+                    f"Si el anuncio menciona un vehículo específico, ESE es probablemente el vehículo de interés del cliente.\n"
+                )
+
     context_block = (
         f"TURNO: {turn_count} {'(PRIMER MENSAJE - puedes saludar)' if turn_count == 1 else '(NO saludes, ve directo al punto)'}\n"
         f"MOMENTO ACTUAL: {current_time_str}\n"
@@ -1749,6 +1800,7 @@ async def handle_message(
         f"INTERÉS DETECTADO: {last_interest or '(Sin modelo)'}\n"
         f"CITA DETECTADA: {last_appointment or '(Sin cita)'}\n"
         f"PAGO DETECTADO: {last_payment or '(Por definir)'}\n"
+        f"{ad_context_section}"
         f"{inventory_section}"
         f"{financing_section}"
         f"HISTORIAL DE CHAT:\n{history[-3000:]}"
