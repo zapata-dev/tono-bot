@@ -67,20 +67,44 @@ El codigo es lo que conecta al cliente con el anuncio. Tiene este formato:
    - **Responsable**: Tu nombre
    - **Estado**: No Iniciado
 
-### Paso 2: Configurar en Facebook/Instagram Ads
+### Paso 2: Configurar en Meta Ads Manager (Facebook/Instagram)
 
-Cuando crees la campana en Meta Ads:
+El codigo NO va en la imagen ni en el texto del anuncio que lee la gente. Va en la **Plantilla de Mensaje** (el mensaje automatico que se le escribe al cliente cuando le da clic al boton de WhatsApp).
 
-1. En la seccion del anuncio, elige **"Enviar mensaje por WhatsApp"** como destino
-2. En el **mensaje prellenado** (el texto que el cliente envia automaticamente al hacer clic), escribe:
+#### 2.1 Crear la Campana y Conjunto de Anuncios
+
+1. Crea tu campana normalmente (generalmente con el objetivo de **Interaccion** o **Ventas**)
+2. En el nivel de **Conjunto de Anuncios**, asegurate de que el destino (App de mensajeria) este marcado como **WhatsApp**
+
+#### 2.2 Disenar el Anuncio
+
+1. Sube tu video o imagen
+2. Escribe el texto principal (Copy) y el titulo normal ("Estrena tu Tunland G9 hoy", etc.)
+3. **El codigo NO va aqui** - el copy del anuncio se mantiene normal
+
+#### 2.3 Configurar la Plantilla de Mensaje (AQUI VA EL CODIGO)
+
+1. Baja hasta la seccion que dice **"Plantilla de mensaje"** (Message Template)
+2. Haz clic en **"+ Crear nueva"** (o edita una existente)
+3. Ve a la seccion del **Mensaje inicial del cliente** (el texto pre-escrito que aparecera en el celular del cliente cuando se abra WhatsApp)
+4. Borra las preguntas por defecto ("Quiero mas informacion", "Tienen disponibilidad?", etc.)
+5. Escribe el mensaje incluyendo el codigo exacto de Monday:
 
 ```
 Hola, me interesa TG9-A3
 ```
 
+> **Opcional**: Puedes hacerlo mas natural, por ejemplo: "Hola, vi su anuncio en Facebook y me interesa TG9-A3. Me dan informes?" - el bot lo detectara igual mientras el codigo este bien escrito.
+
 > **IMPORTANTE**: El codigo (`TG9-A3`) debe estar EXACTAMENTE como lo registraste en Monday. Respeta mayusculas y el guion.
 
-3. Publica el anuncio
+6. Guarda la plantilla con un nombre que reconozcas (ej: "Plantilla G9 Anuncio 3")
+
+#### 2.4 Probar antes de publicar
+
+> **REGLA DE ORO**: Antes de encender la campana en Facebook, enviate un mensaje de prueba a ti mismo haciendo clic en la vista previa del anuncio. Comprueba que el bot reconoce el codigo y te responde enfocado en el modelo correcto. Si el bot no detecta el codigo, revisa el formato antes de gastar presupuesto.
+
+7. Publica el anuncio
 
 ### Paso 3: Actualizar estado en Monday
 
@@ -101,6 +125,14 @@ Hola, me interesa TG9-A3
    - Crea el lead en el tablero de Leads con el Tracking ID `TG9-A3`
    - Vincula el lead con el anuncio en Monday
 4. El cliente **nunca ve el codigo** en la conversacion (el bot lo quita antes de responder)
+
+### Que experimenta el cliente?
+
+1. Ve un anuncio atractivo de la Tunland G9 en Facebook/Instagram
+2. Le da clic al boton **"Enviar mensaje"**
+3. Se abre su WhatsApp y en la caja de texto ya dice "Hola, me interesa TG9-A3"
+4. El cliente solo presiona el boton de enviar
+5. El bot le responde sobre la Tunland G9 sin que el cliente vea ningun codigo raro
 
 ---
 
