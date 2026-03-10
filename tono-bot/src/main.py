@@ -72,13 +72,16 @@ except Exception as e:
     raise
 
 # Sentry (error monitoring) — solo si SENTRY_DSN está configurado
-if settings.SENTRY_DSN:
-    import sentry_sdk
-    sentry_sdk.init(
-        dsn=settings.SENTRY_DSN,
-        traces_sample_rate=0.1,
-        environment="production",
-    )
+if settings.SENTRY_DSN and settings.SENTRY_DSN.strip():
+    try:
+        import sentry_sdk
+        sentry_sdk.init(
+            dsn=settings.SENTRY_DSN.strip(),
+            traces_sample_rate=0.1,
+            environment="production",
+        )
+    except Exception as e:
+        print(f"⚠️ Sentry init failed (invalid DSN?): {e} — continuing without Sentry")
 
 # Logs
 logging.basicConfig(
