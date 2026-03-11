@@ -923,7 +923,7 @@ class MondayService:
             return
 
         query = """
-        mutation ($board_id: ID!, $item_id: ID!, $col_id: String!, $value: JSON!) {
+        mutation ($board_id: ID!, $item_id: ID!, $value: JSON!) {
             change_multiple_column_values(board_id: $board_id, item_id: $item_id, column_values: $value) { id }
         }
         """
@@ -933,7 +933,6 @@ class MondayService:
         variables = {
             "board_id": int(self.board_id),
             "item_id": int(lead_item_id),
-            "col_id": self.leads_connect_ads_col_id,
             "value": json.dumps(col_vals),
         }
 
