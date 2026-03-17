@@ -58,6 +58,7 @@ MODEL_CODE_MAP = {
     "E11": "ESTA 6x4 11.8",
     "EX":  "ESTA 6x4 X13",
     "CA":  "Cascadia",
+    "SU":  "Cascadia",  # Campaña Mejor Propuesta - Seminuevos/Subasta
 }
 
 TRACKING_ID_PATTERN = re.compile(r'\b([A-Z][A-Z0-9]{1,3})-A(\d{1,3})\b', re.IGNORECASE)
