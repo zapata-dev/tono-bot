@@ -220,20 +220,20 @@ Since Baileys/Evolution API does NOT provide Meta Ads metadata reliably, the bot
 | Code | Type | Description |
 |------|------|-------------|
 | `A` | Anuncio | Regular Facebook/Instagram ad |
-| `SU` | Subasta | Mejor Propuesta / Subasta |
+| `SU` | Mejor Precio | Mejor Propuesta / Precio especial |
 | `LQ` | Liquidación | Liquidación / Precio especial |
 | `PR` | Promoción | Promoción especial |
 | `EV` | Evento | Evento / Open House |
 
-Examples: `TG9-A1` (Tunland G9, Ad #1), `CA-SU1` (Cascadia, Subasta #1), `ML-LQ2` (Miler, Liquidación #2)
+Examples: `TG9-A1` (Tunland G9, Ad #1), `CA-SU1` (Cascadia, Mejor Precio #1), `ML-LQ2` (Miler, Liquidación #2)
 
 ### How It Works
 1. Facebook/Instagram ad has pre-filled message: "Hola, me interesa TG9-A1" or "Hola CA-SU1"
 2. Bot detects pattern `[A-Z][A-Z0-9]{1,3}-(A|SU|LQ|PR|EV)\d{1,3}` in first message
 3. Model auto-resolved → `last_interest` set to vehicle label
-4. Campaign type resolved → context includes type (e.g., "Subasta de Cascadia")
+4. Campaign type resolved → context includes type (e.g., "Mejor Precio de Cascadia")
 5. Tracking ID stripped from message before GPT processing
-6. GPT receives tracking context: "Este cliente llegó por Subasta de Cascadia"
+6. GPT receives tracking context: "Este cliente llegó por Mejor Precio de Cascadia"
 7. Lead created in Monday.com with tracking_id column populated
 8. Lead linked to Anuncio item via Connect Boards column
 9. Owner alert includes tracking ID
@@ -442,7 +442,7 @@ curl http://localhost:8080/health
 
 8. **Facebook Referral Tracking**: CTWA referral data extracted from first message webhook, persisted in session context, and sent to Monday.com source column. Supports both Baileys (`contextInfo`) and Cloud API (`referral` object) formats.
 
-9. **Ad Tracking ID (V3)**: Internal attribution system detecting `<MODEL_CODE>-<CAMPAIGN_TYPE><NUMBER>` pattern (e.g., `TG9-A1`, `CA-SU1`, `ML-LQ2`) in first message. Campaign types: A (Anuncio), SU (Subasta), LQ (Liquidación), PR (Promoción), EV (Evento). Auto-resolves vehicle model and campaign type, strips code before GPT, persists in context, populates Monday.com Tracking ID column, and connects lead to Anuncios board.
+9. **Ad Tracking ID (V3)**: Internal attribution system detecting `<MODEL_CODE>-<CAMPAIGN_TYPE><NUMBER>` pattern (e.g., `TG9-A1`, `CA-SU1`, `ML-LQ2`) in first message. Campaign types: A (Anuncio), SU (Mejor Precio), LQ (Liquidación), PR (Promoción), EV (Evento). Auto-resolves vehicle model and campaign type, strips code before GPT, persists in context, populates Monday.com Tracking ID column, and connects lead to Anuncios board.
 
 ## Testing
 

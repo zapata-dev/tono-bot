@@ -49,7 +49,7 @@ VEHICLE_DROPDOWN_MAP = {
 # V3: TRACKING ID → Internal ad attribution (Baileys workaround)
 # ============================================================
 # Format: <MODEL_CODE>-<CAMPAIGN_TYPE><NUMBER>
-# Examples: TG9-A1 (Tunland G9 Ad 1), CA-SU1 (Cascadia Subasta 1)
+# Examples: TG9-A1 (Tunland G9 Ad 1), CA-SU1 (Cascadia Mejor Precio 1)
 MODEL_CODE_MAP = {
     "TG7": "Tunland G7",
     "TG9": "Tunland G9",
@@ -64,7 +64,7 @@ MODEL_CODE_MAP = {
 # Campaign type codes for tracking IDs
 CAMPAIGN_TYPE_MAP = {
     "A":  "Anuncio",            # Regular ad (default)
-    "SU": "Subasta",            # Mejor Propuesta / Subasta
+    "SU": "Mejor Precio",       # Mejor Propuesta / Precio especial
     "LQ": "Liquidación",        # Liquidación / Precio especial
     "PR": "Promoción",          # Promoción especial
     "EV": "Evento",             # Evento / Open House

@@ -181,6 +181,20 @@ class CampaignService:
                 return c
         return None
 
+    def find_campaign_by_model_code(self, model_code: str) -> Optional[Campaign]:
+        """Fallback: busca campaña cuyo tracking ID comparta el mismo código de modelo.
+
+        Ejemplo: model_code="CA" matchea campaña con tracking_id="CA-A1".
+        Útil cuando el anuncio usa CA-SU1 pero el Sheet tiene CA-A1.
+        """
+        if not model_code:
+            return None
+        prefix = model_code.strip().upper()
+        for c in self.get_active_campaigns():
+            if c.tracking_id and c.tracking_id.upper().startswith(prefix + "-"):
+                return c
+        return None
+
     def find_campaign_by_keywords(self, message: str) -> Optional[Campaign]:
         """Busca campaña que coincida con keywords en el mensaje."""
         if not message:

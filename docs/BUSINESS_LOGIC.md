@@ -334,15 +334,15 @@ referral, conversionSource, ad_id, ctwa_clid, Tracking ID (`MODELO-TIPO+NUMERO`)
 **Formato del código:**
 `<MODELO>-<TIPO_CAMPAÑA><NUMERO>` donde:
 - MODELO: código del vehículo (TG7, TG9, TE5, ML, TP, E11, EX, CA)
-- TIPO_CAMPAÑA: tipo de anuncio (A=Anuncio, SU=Subasta, LQ=Liquidación, PR=Promoción, EV=Evento)
+- TIPO_CAMPAÑA: tipo de anuncio (A=Anuncio, SU=Mejor Precio, LQ=Liquidación, PR=Promoción, EV=Evento)
 - NUMERO: secuencial por modelo y tipo (1-999)
 
-**Ejemplos:** `TG9-A1` (Tunland G9, Anuncio #1), `CA-SU1` (Cascadia, Subasta #1), `ML-LQ2` (Miler, Liquidación #2)
+**Ejemplos:** `TG9-A1` (Tunland G9, Anuncio #1), `CA-SU1` (Cascadia, Mejor Precio #1), `ML-LQ2` (Miler, Liquidación #2)
 
 **Acción ejecutada:**
 - Se detecta el patrón en el primer mensaje.
 - Se resuelve automáticamente el modelo de interés (`last_interest`).
-- Se resuelve el tipo de campaña para inyectar contexto al GPT (ej: "Subasta de Cascadia").
+- Se resuelve el tipo de campaña para inyectar contexto al GPT (ej: "Mejor Precio de Cascadia").
 - Se elimina el código del mensaje antes de enviarlo al GPT.
 - Se crea el lead en Monday.com con la columna Tracking ID populada.
 - Se vincula el lead con el ítem correspondiente en el tablero de Anuncios.

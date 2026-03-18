@@ -38,14 +38,14 @@ No todos los anuncios son iguales. El tipo de campaña va entre el modelo y el n
 | Codigo | Tipo | Cuando usarlo | Ejemplo |
 |--------|------|---------------|---------|
 | `A` | **Anuncio** | Anuncio regular de Facebook/Instagram | `TG9-A1` |
-| `SU` | **Subasta** | Mejor Propuesta / Subasta | `CA-SU1` |
+| `SU` | **Mejor Precio** | Mejor Propuesta / Mejor Precio | `CA-SU1` |
 | `LQ` | **Liquidacion** | Liquidacion / Precio especial | `ML-LQ1` |
 | `PR` | **Promocion** | Promocion especial con condiciones | `TP-PR1` |
 | `EV` | **Evento** | Evento / Open House | `E11-EV1` |
 
 ### Codigos de cada modelo
 
-| Vehiculo | Codigo | Anuncio regular | Subasta | Liquidacion |
+| Vehiculo | Codigo | Anuncio regular | Mejor Precio | Liquidacion |
 |----------|--------|-----------------|---------|-------------|
 | Tunland G7 | `TG7` | `TG7-A1` | `TG7-SU1` | `TG7-LQ1` |
 | Tunland G9 | `TG9` | `TG9-A1` | `TG9-SU1` | `TG9-LQ1` |
@@ -58,7 +58,7 @@ No todos los anuncios son iguales. El tipo de campaña va entre el modelo y el n
 
 ### Reglas del codigo
 
-1. **El numero es secuencial por modelo Y por tipo**. Si ya tienes `TG9-A1` y `TG9-A2`, el siguiente anuncio regular es `TG9-A3`. Si es la primera subasta de G9, es `TG9-SU1`.
+1. **El numero es secuencial por modelo Y por tipo**. Si ya tienes `TG9-A1` y `TG9-A2`, el siguiente anuncio regular es `TG9-A3`. Si es la primera campaña de mejor precio de G9, es `TG9-SU1`.
 2. **Nunca repitas un codigo**. Cada anuncio tiene su propio codigo unico.
 3. **Nunca reutilices un codigo viejo**. Si desactivas `TG9-A1`, el siguiente anuncio regular de G9 es `TG9-A3` (o el que siga), NO vuelves a usar `TG9-A1`.
 4. **Puedes llegar hasta 999** por modelo y tipo (`TG9-A999`, `CA-SU999`). No te vas a quedar sin numeros.
@@ -74,7 +74,7 @@ No todos los anuncios son iguales. El tipo de campaña va entre el modelo y el n
 2. En el grupo **"Anuncios Pendientes"**, haz clic en **"+ Agregar elemento"**
 3. Llena las columnas:
    - **Elemento**: Nombre descriptivo (ej: "Tunland G9 - Reel Financiamiento Abril")
-   - **Codigo**: El siguiente numero disponible (ej: `TG9-A3` para anuncio regular, `TG9-SU1` para subasta)
+   - **Codigo**: El siguiente numero disponible (ej: `TG9-A3` para anuncio regular, `TG9-SU1` para campaña de mejor precio)
    - **Modelo**: Selecciona el vehiculo (ej: Tunland G9)
    - **Tipo de Anuncio**: Promocion, Evento, etc.
    - **Responsable**: Tu nombre
@@ -107,7 +107,7 @@ El codigo NO va en la imagen ni en el texto del anuncio que lee la gente. Va en 
 Hola, me interesa TG9-A3
 ```
 
-O para una subasta:
+O para una campaña de mejor precio:
 ```
 Hola CA-SU1
 ```
@@ -135,10 +135,10 @@ Hola CA-SU1
 ## Que pasa cuando un cliente hace clic en el anuncio?
 
 1. El cliente hace clic en el anuncio de Facebook/Instagram
-2. Se abre WhatsApp con el mensaje prellenado: "Hola, me interesa TG9-A3" (o "Hola CA-SU1" para subasta)
+2. Se abre WhatsApp con el mensaje prellenado: "Hola, me interesa TG9-A3" (o "Hola CA-SU1" para campaña de mejor precio)
 3. El bot **automaticamente**:
    - Detecta el codigo `TG9-A3` o `CA-SU1`
-   - Sabe que el cliente quiere una **Tunland G9** (o **Cascadia**) y el tipo de campaña (Anuncio regular, Subasta, etc.)
+   - Sabe que el cliente quiere una **Tunland G9** (o **Cascadia**) y el tipo de campaña (Anuncio regular, Mejor Precio, etc.)
    - Le responde enfocandose en ese modelo y las reglas de esa campaña
    - Crea el lead en el tablero de Leads con el Tracking ID
    - Vincula el lead con el anuncio en Monday
@@ -166,19 +166,19 @@ Cuando dejes de correr un anuncio en Meta:
 
 ## Ejemplo completo
 
-Digamos que vas a crear anuncios regulares y una subasta del Cascadia en marzo:
+Digamos que vas a crear anuncios regulares y una campaña de mejor precio del Cascadia en marzo:
 
 | Elemento | Codigo | Modelo | Tipo | Mensaje prellenado en WhatsApp |
 |----------|--------|--------|------|-------------------------------|
 | G9 - Video Testimonio Cliente | `TG9-A1` | Tunland G9 | Anuncio | "Hola, me interesa TG9-A1" |
 | G9 - Comparativa vs Competencia | `TG9-A2` | Tunland G9 | Anuncio | "Hola, me interesa TG9-A2" |
-| Cascadia - Mejor Propuesta Leon | `CA-SU1` | Cascadia | Subasta | "Hola CA-SU1" |
+| Cascadia - Mejor Propuesta Leon | `CA-SU1` | Cascadia | Mejor Precio | "Hola CA-SU1" |
 | Miler - Liquidacion Marzo | `ML-LQ1` | Miler | Liquidacion | "Hola ML-LQ1" |
 
 Despues de un mes, revisas en el tablero de **Leads** y filtras por Tracking ID:
 - `TG9-A1` trajo 25 leads, 3 citas, 1 venta → **Buen anuncio regular**
 - `TG9-A2` trajo 50 leads, 0 citas, 0 ventas → **Mucho trafico pero no convierte**
-- `CA-SU1` trajo 15 leads, 8 propuestas, 1 venta → **Subasta exitosa!**
+- `CA-SU1` trajo 15 leads, 8 propuestas, 1 venta → **Mejor Precio exitosa!**
 - `ML-LQ1` trajo 10 leads, 4 citas, 2 ventas → **Liquidacion funciono bien**
 
 ---
@@ -204,12 +204,12 @@ Si no te importa distinguir la plataforma, puedes usar el mismo codigo en ambas.
 ### Que numero sigue si ya tengo TG9-A1 y TG9-A2?
 `TG9-A3`. Siempre el siguiente numero. Revisa en el tablero cual fue el ultimo que usaste para ese modelo y tipo.
 
-### Puedo tener un anuncio regular y una subasta del mismo modelo?
-**Si.** Cada tipo tiene su propia numeracion. Puedes tener `CA-A1` (anuncio regular de Cascadia) y `CA-SU1` (subasta de Cascadia) al mismo tiempo sin problema.
+### Puedo tener un anuncio regular y una campaña de mejor precio del mismo modelo?
+**Si.** Cada tipo tiene su propia numeracion. Puedes tener `CA-A1` (anuncio regular de Cascadia) y `CA-SU1` (campaña de mejor precio de Cascadia) al mismo tiempo sin problema.
 
 ### Que tipos de campaña puedo usar?
 - **A** = Anuncio regular (el de siempre)
-- **SU** = Subasta / Mejor Propuesta
+- **SU** = Mejor Precio / Mejor Propuesta
 - **LQ** = Liquidacion / Precio especial
 - **PR** = Promocion especial
 - **EV** = Evento / Open House

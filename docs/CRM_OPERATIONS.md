@@ -131,7 +131,7 @@ Cada transición de estado genera una nota en Monday.com con detalles:
 | Código | Tipo | Descripción |
 |--------|------|-------------|
 | `A` | Anuncio | Anuncio regular de Facebook/Instagram |
-| `SU` | Subasta | Mejor Propuesta / Subasta |
+| `SU` | Mejor Precio | Mejor Propuesta / Precio especial |
 | `LQ` | Liquidación | Liquidación / Precio especial |
 | `PR` | Promoción | Promoción especial |
 | `EV` | Evento | Evento / Open House |
@@ -143,7 +143,7 @@ Ejemplos: `TG9-A1`, `CA-SU1`, `ML-LQ2`, `TP-PR1`, `E11-EV1`
 1. Anuncio en Meta tiene mensaje pre-llenado: "Hola CA-SU1"
 2. Bot detecta patrón `[A-Z][A-Z0-9]{1,3}-(A|SU|LQ|PR|EV)\d{1,3}` en primer mensaje
 3. Modelo auto-resuelto → `last_interest` = etiqueta del vehículo
-4. Tipo de campaña resuelto → contexto incluye tipo (ej: "Subasta de Cascadia")
+4. Tipo de campaña resuelto → contexto incluye tipo (ej: "Mejor Precio de Cascadia")
 5. Tracking ID eliminado del mensaje antes de enviar a GPT
 6. Lead creado en Monday.com con columna Tracking ID populada
 7. Lead vinculado a ítem en tablero Anuncios via Connect Boards

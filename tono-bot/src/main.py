@@ -1458,6 +1458,16 @@ async def process_single_event(bot_state: GlobalState, data: Dict[str, Any]):
     # y NO fue enviado por el bot → PODRÍA ser un HUMANO ASESOR
     if from_me:
         msg_obj = data.get("message", {}) or {}
+
+        # 0. Ignorar mensajes del sistema de WhatsApp (botInvokeMessage, protocolMessage, etc.)
+        #    Estos NO son mensajes de un humano y NO deben activar handoff.
+        _SYSTEM_MESSAGE_KEYS = {"botInvokeMessage", "protocolMessage", "reactionMessage",
+                                "senderKeyDistributionMessage", "messageContextInfo"}
+        msg_content_keys = set(msg_obj.keys()) - {"messageContextInfo"}
+        if msg_content_keys and msg_content_keys.issubset(_SYSTEM_MESSAGE_KEYS):
+            logger.info(f"✓ Mensaje del sistema WhatsApp ignorado ({msg_content_keys})")
+            return
+
         msg_text, _, _ = _extract_user_message(msg_obj)
         msg_text = msg_text.strip()
 
