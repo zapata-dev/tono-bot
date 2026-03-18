@@ -429,6 +429,12 @@ class MondayService:
         else:
             logger.warning("⚠️ No V2 column IDs configured (vehicle/payment/appointment)")
 
+        # Warn about critical missing columns
+        if not self.tracking_id_col_id:
+            logger.warning("⚠️ MONDAY_TRACKING_ID_COLUMN_ID no configurada — los Tracking IDs NO se guardarán en la columna del board de Leads")
+        if not self.leads_connect_ads_col_id:
+            logger.warning("⚠️ MONDAY_LEADS_CONNECT_ADS_COLUMN_ID no configurada — los leads NO se vincularán al tablero de Anuncios")
+
     def _sanitize_phone(self, phone: str) -> str:
         if not phone:
             return ""

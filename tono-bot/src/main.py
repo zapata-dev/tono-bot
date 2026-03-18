@@ -1249,12 +1249,15 @@ async def send_evolution_message(bot_state: GlobalState, number_or_jid: str, tex
                             await asyncio.sleep(1.5)
                         else:
                             logger.error(f"❌ Error foto {i+1} después de 3 intentos: {response.text[:200]}")
+                            logger.error(f"❌ URL que falló: {media_url[:200]}")
 
             # If no photos were sent but we had text with photo promise, send text anyway
             if fotos_enviadas == 0 and text:
-                logger.warning(f"⚠️ Ninguna foto enviada, enviando solo texto")
+                logger.warning(f"⚠️ Ninguna foto enviada de {total_fotos} intentadas, enviando solo texto")
+                # Replace photo-promise text with an apology so the client isn't confused
+                fallback_text = "Estoy teniendo problemas para enviar las fotos. Un asesor te las comparte en breve."
                 url_text = f"/message/sendText/{quote(settings.EVO_INSTANCE, safe='')}"
-                payload_text = {"number": clean_number, "text": text}
+                payload_text = {"number": clean_number, "text": fallback_text}
                 await _evo_post(client, url_text, json=payload_text)
 
         else:
