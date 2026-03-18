@@ -218,10 +218,11 @@ class CampaignService:
 
         header = (
             "=== CAMPAÑAS ACTIVAS ===\n"
-            "Las siguientes campañas están ACTIVAS. Si un cliente llega por el Tracking ID "
-            "o menciona las keywords de alguna campaña, SIGUE LAS INSTRUCCIONES de esa campaña "
-            "con PRIORIDAD sobre las reglas generales (inventario, financiamiento, PDFs).\n"
-            "Si el cliente NO está relacionado con ninguna campaña, ignora este bloque.\n\n"
+            "Las siguientes campañas están ACTIVAS. Si un cliente llega con un Tracking ID "
+            "o menciona EXPLÍCITAMENTE las keywords de alguna campaña, puedes usar las instrucciones de esa campaña.\n"
+            "IMPORTANTE: Si el cliente es ambiguo o no ha confirmado interés en la unidad de la campaña, "
+            "NO sueltes precio, ubicación ni condiciones de la campaña. Primero confirma que se refiere a esa unidad.\n"
+            "Si el cliente NO está relacionado con ninguna campaña, ignora este bloque completamente.\n\n"
         )
 
         return header + "\n\n".join(blocks) + "\n=== FIN CAMPAÑAS ACTIVAS ==="

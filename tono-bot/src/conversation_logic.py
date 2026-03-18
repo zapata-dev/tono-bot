@@ -127,6 +127,25 @@ REGLAS OBLIGATORIAS:
 - NUNCA ocultes la condición de una unidad. La transparencia genera confianza.
 - Si hay unidades nuevas, demo Y/O seminuevo del mismo modelo, presenta todas las opciones para que el cliente elija.
 
+0.8) NO ASUMIR UNIDAD NI PROMOCIÓN POR MENSAJES AMBIGUOS (CRÍTICO):
+- PRINCIPIO: Usa lo que el cliente SÍ dijo para enfocar la conversación, pero NUNCA saltes a una unidad específica con precio, ubicación o condiciones sin confirmación.
+- LÓGICA DE ENFOQUE:
+  * Si dice "camión", "tracto", "tractocamión" → enfócate SOLO en tractocamiones del inventario. NO preguntes si quiere pickup o van.
+  * Si dice "pickup", "camioneta" → enfócate SOLO en pickups del inventario.
+  * Si dice "van", "panel" → enfócate SOLO en vans del inventario.
+  * Si dice "el rojo", "ese", "como el de la foto" → pregunta a cuál se refiere dentro del tipo que mencionó, o si no mencionó tipo, pregunta qué tipo busca.
+  * Si dice solo "más información" sin contexto → pregunta qué tipo de vehículo le interesa.
+- EJEMPLO CORRECTO (dice "camión"):
+  * "Claro, tenemos varias opciones de tractocamión. ¿Tienes algún modelo en mente o quieres que te comparta las opciones disponibles?"
+- EJEMPLO CORRECTO (dice "camión" + "como el rojo"):
+  * "Claro, tenemos varios tractocamiones disponibles. ¿Recuerdas el modelo que viste o quieres que te comparta las opciones?"
+- EJEMPLO INCORRECTO:
+  * "El Cascadia 2014 está en liquidación en León a $600,000 de contado." (saltó a unidad, precio, ubicación y condiciones sin confirmación)
+- NUNCA menciones liquidaciones, subastas, precios de salida, fechas límite, ni condiciones especiales hasta que el cliente confirme que se refiere a ESA unidad específica.
+- Aunque el cliente haya llegado por un anuncio de Facebook/Instagram, si su mensaje NO menciona un modelo concreto, NO asumas que quiere la unidad del anuncio. Enfoca por tipo de vehículo y confirma.
+- TRACKING ID: Si el cliente envía un Tracking ID de campaña (ej. CA-LQ1, TG9-A1), SÍ sabemos su interés. Confirma brevemente ("¿Te refieres al [modelo] del anuncio?") y al confirmar, ahora sí da los detalles de la campaña.
+- Cuando el cliente es ambiguo, compórtate como asesor consultivo que perfila, no como cotizador automático que suelta toda la información de golpe.
+
 0.5) INTERPRETACIÓN COMERCIAL — CARGA vs. PASAJEROS (CRÍTICO):
 - Cuando el cliente pregunte por "asientos", "pasajeros", "cuántos caben", "de cuántos es", "bancas", "filas de asientos", "para personal", "transporte de personal" o "es panel o van":
   → ESTÁ PREGUNTANDO si la unidad es versión de PASAJEROS o de CARGA. NO pregunta si existen asientos físicos en la cabina (eso es obvio, toda unidad tiene asientos de cabina).
@@ -1804,7 +1823,9 @@ async def handle_message(
         campaign_type_label = tracking_data.get("campaign_type_label", "Anuncio")
         tracking_context = (
             f"ORIGEN: Este cliente llegó por {campaign_type_label} de {tracking_vehicle} "
-            f"(Tracking: {tracking_id}). Ya sabemos su modelo de interés, NO preguntes qué modelo le interesa.\n"
+            f"(Tracking: {tracking_id}). Sabemos su modelo de interés. "
+            f"Si es el primer mensaje, confirma brevemente que le interesa el {tracking_vehicle} "
+            f"antes de dar precio, ubicación y condiciones completas.\n"
         )
 
     # Build ad context section if referral has externalAdReply info
@@ -1834,8 +1855,8 @@ async def handle_message(
                     f"CONTEXTO DEL ANUNCIO (el cliente llegó por este anuncio de Facebook/Instagram):\n"
                     f"  Título: {ad_title}\n"
                     f"  Descripción: {ad_body}\n"
-                    f"  IMPORTANTE: Usa este contexto para entender qué vehículo le interesa al cliente. "
-                    f"Si el anuncio menciona un vehículo específico, ESE es probablemente el vehículo de interés del cliente.\n"
+                    f"  IMPORTANTE: Este contexto te indica cómo llegó el cliente, pero NO asumas que quiere exactamente esa unidad. "
+                    f"Si el cliente no ha mencionado un modelo específico, confirma su interés antes de ofrecer detalles de una unidad concreta.\n"
                 )
 
     # Campañas activas del Sheet

@@ -831,6 +831,10 @@ async def _process_accumulated_messages(bot_state: GlobalState, remote_jid: str)
                         # Get tracking ID from context
                         tracking_id = result_context.get("tracking_id") or context.get("tracking_id") or ""
                         tracking_data = result_context.get("tracking_data") or context.get("tracking_data") or {}
+                        if tracking_id:
+                            logger.info(f"🏷️ MONDAY lead_data incluye tracking_id='{tracking_id}'")
+                        else:
+                            logger.info(f"🏷️ MONDAY lead_data SIN tracking_id (result_ctx={bool(result_context.get('tracking_id'))}, ctx={bool(context.get('tracking_id'))})")
 
                         lead_data = {
                             "telefono": remote_jid.split("@")[0],
@@ -1249,12 +1253,15 @@ async def send_evolution_message(bot_state: GlobalState, number_or_jid: str, tex
                             await asyncio.sleep(1.5)
                         else:
                             logger.error(f"❌ Error foto {i+1} después de 3 intentos: {response.text[:200]}")
+                            logger.error(f"❌ URL que falló: {media_url[:200]}")
 
             # If no photos were sent but we had text with photo promise, send text anyway
             if fotos_enviadas == 0 and text:
-                logger.warning(f"⚠️ Ninguna foto enviada, enviando solo texto")
+                logger.warning(f"⚠️ Ninguna foto enviada de {total_fotos} intentadas, enviando solo texto")
+                # Replace photo-promise text with an apology so the client isn't confused
+                fallback_text = "Estoy teniendo problemas para enviar las fotos. Un asesor te las comparte en breve."
                 url_text = f"/message/sendText/{quote(settings.EVO_INSTANCE, safe='')}"
-                payload_text = {"number": clean_number, "text": text}
+                payload_text = {"number": clean_number, "text": fallback_text}
                 await _evo_post(client, url_text, json=payload_text)
 
         else:

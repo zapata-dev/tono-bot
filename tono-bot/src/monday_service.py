@@ -429,6 +429,12 @@ class MondayService:
         else:
             logger.warning("⚠️ No V2 column IDs configured (vehicle/payment/appointment)")
 
+        # Warn about critical missing columns
+        if not self.tracking_id_col_id:
+            logger.warning("⚠️ MONDAY_TRACKING_ID_COLUMN_ID no configurada — los Tracking IDs NO se guardarán en la columna del board de Leads")
+        if not self.leads_connect_ads_col_id:
+            logger.warning("⚠️ MONDAY_LEADS_CONNECT_ADS_COLUMN_ID no configurada — los leads NO se vincularán al tablero de Anuncios")
+
     def _sanitize_phone(self, phone: str) -> str:
         if not phone:
             return ""
@@ -712,6 +718,13 @@ class MondayService:
             tracking_id = (lead_data.get("tracking_id") or "").strip()
             if tracking_id:
                 col_vals[self.tracking_id_col_id] = tracking_id
+                logger.info(f"🏷️ Tracking ID '{tracking_id}' → columna {self.tracking_id_col_id}")
+            else:
+                logger.info(f"🏷️ Tracking ID vacío en lead_data (col configurada: {self.tracking_id_col_id})")
+        else:
+            tracking_id_in_data = (lead_data.get("tracking_id") or "").strip()
+            if tracking_id_in_data:
+                logger.warning(f"⚠️ Tracking ID '{tracking_id_in_data}' detectado pero MONDAY_TRACKING_ID_COLUMN_ID no está configurada")
 
         return col_vals
 
@@ -791,10 +804,18 @@ class MondayService:
                 }
                 """
 
+            col_vals_json = json.dumps(col_vals)
+            # Log tracking-related keys for debugging
+            tracking_col = self.tracking_id_col_id
+            if tracking_col and tracking_col in col_vals:
+                logger.info(f"🏷️ col_vals CONTIENE tracking: {tracking_col}='{col_vals[tracking_col]}'")
+            elif tracking_col:
+                logger.warning(f"⚠️ col_vals NO contiene tracking_col={tracking_col}. Keys: {list(col_vals.keys())}")
+
             vars_create = {
                 "board_id": int(self.board_id),
                 "name": item_name_display,
-                "vals": json.dumps(col_vals)
+                "vals": col_vals_json
             }
             if group_id:
                 vars_create["group_id"] = group_id
