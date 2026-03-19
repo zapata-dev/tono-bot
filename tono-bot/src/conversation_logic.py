@@ -147,12 +147,14 @@ REGLAS OBLIGATORIAS:
 - DESAMBIGUACIÓN DE CAMPAÑAS (CLIENTE ORGÁNICO - CRÍTICO):
   Si el cliente llega SIN tracking ID pero menciona un modelo que tiene una campaña activa (ej. dice "me interesa la Cascadia"):
   * NO asumas automáticamente que se refiere a la unidad de la campaña.
-  * NO sueltes precio de salida, dinámica, fecha límite ni condiciones de campaña de golpe.
-  * SÍ menciona que hay opciones: "Tenemos varias opciones de [modelo]. ¿Buscas una del inventario regular o te interesa la [modelo año] en [ciudad] que tenemos en dinámica de [tipo campaña]?"
-  * Solo cuando el cliente CONFIRME que quiere la unidad de campaña, aplica las instrucciones de campaña.
-  * Si el cliente dice que quiere otra unidad o inventario regular, ignora la campaña y sigue flujo normal.
-  * Usa atributos distintivos para perfilar: año, ciudad, precio de referencia, tipo de dinámica.
-  * Ejemplo: Cliente dice "Info de la Cascadia" → "Claro, tenemos una Cascadia 2014 en León con dinámica de Mejor Propuesta, pero también te puedo apoyar con otras opciones. ¿Cuál te interesa?"
+  * NO sueltes precio de salida, dinámica, fecha límite, ubicación ni condiciones de campaña de golpe.
+  * NO menciones la campaña ni la dinámica especial de entrada. Sé IMPARCIAL y GENERAL.
+  * Pregunta de forma abierta y neutra para que el CLIENTE se perfile solo: "Claro, ¿qué Cascadia te interesa?" o "¿Tienes algún año o versión en mente?"
+  * Deja que el cliente hable. Si él menciona año, ciudad, precio, dinámica o detalles que coincidan con la campaña → ENTONCES confirma y activa campaña.
+  * Si el cliente no da señales de campaña, sigue por inventario normal.
+  * NUNCA ofrezcas opciones tipo menú ("¿quieres la regular o la de la dinámica?") — eso sesga al cliente.
+  * Ejemplo CORRECTO: "Info de la Cascadia" → "Claro, ¿cuál Cascadia te interesa? ¿Tienes algún año o versión en mente?"
+  * Ejemplo INCORRECTO: "Info de la Cascadia" → "Tenemos una Cascadia 2014 en León con dinámica de Mejor Propuesta, o te interesa otra?" (esto ya perfila al cliente hacia la campaña)
 - Cuando el cliente es ambiguo, compórtate como asesor consultivo que perfila, no como cotizador automático que suelta toda la información de golpe.
 
 0.5) INTERPRETACIÓN COMERCIAL — CARGA vs. PASAJEROS (CRÍTICO):
@@ -2000,15 +2002,18 @@ async def handle_message(
             f"INSTRUCCIONES DE CAMPAÑA (REFERENCIA — aplícalas solo cuando sea natural en la conversación):\n"
             f"{_matched_campaign.instructions}\n"
             f"*** FIN INSTRUCCIONES DE CAMPAÑA ***\n"
-            f"REGLAS PARA CLIENTE ORGÁNICO:\n"
-            f"1. NO asumas que el cliente ya conoce la dinámica/campaña. Pregunta naturalmente.\n"
-            f"2. Si el cliente pregunta precio o disponibilidad del {campaign_vehicle_label}, "
-            f"puedes mencionar que hay una dinámica/promoción especial activa y explicar brevemente.\n"
-            f"3. Deja que la conversación fluya. Si el cliente solo quiere info general, dásela.\n"
-            f"4. Si el cliente muestra interés concreto, ENTONCES guíalo hacia la dinámica de campaña.\n"
-            f"5. Sigue ofreciendo el inventario completo si el cliente pregunta por otros modelos.\n"
-            f"INTERPRETACIÓN DE MONTOS: En contexto de esta campaña con precios en cientos de miles, "
-            f"interpreta cantidades cortas en su equivalente correcto: '700' = $700,000, '650' = $650,000.\n"
+            f"REGLAS PARA CLIENTE ORGÁNICO (PRIORIDAD MÁXIMA):\n"
+            f"1. SÉ IMPARCIAL. NO menciones la campaña ni la dinámica de entrada. El cliente no sabe que existe.\n"
+            f"2. Pregunta de forma ABIERTA y NEUTRA: '¿Cuál {campaign_vehicle_label} te interesa?' o "
+            f"'¿Tienes algún año o versión en mente?' — deja que EL CLIENTE se perfile solo.\n"
+            f"3. NUNCA ofrezcas menú tipo '¿quieres la regular o la de la dinámica?' — eso sesga.\n"
+            f"4. ESPERA a que el cliente dé señales claras (mencione año, ciudad, precio, dinámica, "
+            f"'vi un anuncio', 'la de mejor propuesta', 'la de León', 'la de 649'). "
+            f"Solo ENTONCES confirma y aplica las instrucciones de campaña.\n"
+            f"5. Si el cliente NO da señales de campaña, sigue por inventario normal como cualquier cliente.\n"
+            f"6. Sigue ofreciendo el inventario completo si el cliente pregunta por otros modelos.\n"
+            f"INTERPRETACIÓN DE MONTOS (solo cuando campaña ya esté confirmada): "
+            f"'700' = $700,000, '650' = $650,000.\n"
         )
 
     # Build ad context section if referral has externalAdReply info
