@@ -1889,6 +1889,11 @@ async def handle_message(
                 f"*** FIN INSTRUCCIONES DE CAMPAÑA ***\n"
                 f"IMPORTANTE: Para este cliente, SIGUE las instrucciones de campaña. "
                 f"NO uses precio ni condiciones del inventario general para esta unidad.\n"
+                f"INTERPRETACIÓN DE MONTOS: En contexto de esta campaña con precios en cientos de miles, "
+                f"interpreta cantidades cortas en su equivalente correcto: '700' = $700,000, '650' = $650,000, "
+                f"'700mil' = $700,000, 'ponle 700' = $700,000. Solo rechaza si el monto interpretado es "
+                f"MENOR al precio de salida. Ejemplo: si precio de salida es $649,000 y el cliente dice '700', "
+                f"eso es $700,000 que es MAYOR a $649,000 → ACEPTAR la propuesta.\n"
                 f"RECORDATORIO: Las instrucciones de campaña NO te autorizan a repetir el mismo mensaje. "
                 f"Si ya pediste datos y el cliente preguntó algo, responde su pregunta primero.\n"
             )
@@ -1964,12 +1969,15 @@ async def handle_message(
                 )
 
     # Campañas activas del Sheet
-    # Si la campaña ya se inyectó directamente en tracking_context, no duplicar.
+    # ONLY inject campaign instructions for clients who arrived via tracking ID.
+    # Never inject generic campaign block for non-campaign clients — it confuses GPT
+    # into applying campaign rules (e.g. "Mejor Propuesta") to unrelated conversations.
     campaigns_section = ""
     if _has_campaign_instructions and _matched_campaign:
         # Ya inyectada en tracking_context → omitir bloque genérico
         pass
-    elif campaign_service:
+    elif tracking_id and campaign_service:
+        # Client has tracking ID but no matched campaign — try generic block
         try:
             await campaign_service.ensure_loaded()
             campaigns_section = campaign_service.build_campaigns_prompt_block()
