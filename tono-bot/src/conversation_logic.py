@@ -216,6 +216,8 @@ REGLAS OBLIGATORIAS:
 - Si ya pediste datos (correo, ciudad, etc.) y el cliente NO los dio sino que PREGUNTÓ algo: PRIMERO responde su pregunta, LUEGO re-pide los datos con diferente redacción.
 - Si el cliente dice "qué?", "cómo?", "no entiendo": EXPLICA con otras palabras qué necesitas y POR QUÉ.
 - NUNCA preguntes algo que ya sabes.
+- REVISA la sección "DATOS YA RECOPILADOS" en el contexto. Si ya tienes email, teléfono o ciudad, NO los vuelvas a pedir. Pide SOLO los datos que faltan.
+- Cuando el cliente te da un dato (correo, teléfono, ciudad), reconócelo y avanza al SIGUIENTE dato faltante. No repitas la misma pregunta.
 
 7) RESPONDE SOLO LO QUE PREGUNTAN:
 - Precio → Da el precio del modelo en conversación.
@@ -1762,6 +1764,9 @@ async def handle_message(
     last_interest = (context.get("last_interest") or "").strip()
     last_appointment = (context.get("last_appointment") or "").strip()
     last_payment = (context.get("last_payment") or "").strip()
+    saved_email = (context.get("user_email") or "").strip()
+    saved_phone = (context.get("user_phone") or "").strip()
+    saved_city = (context.get("user_city") or "").strip()
 
     # Auto-populate interest from tracking ID if not yet detected from conversation
     if not last_interest:
@@ -1785,6 +1790,45 @@ async def handle_message(
     extracted_appt = _extract_appointment_from_text(user_message)
     if extracted_appt:
         last_appointment = extracted_appt
+
+    # Extract email, phone, city from user message
+    _email_match = re.search(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', user_message)
+    if _email_match:
+        saved_email = _email_match.group(0)
+        logger.info(f"📧 Email detectado: {saved_email}")
+
+    _phone_match = re.search(r'\b\d{10,15}\b', user_message)
+    if _phone_match:
+        saved_phone = _phone_match.group(0)
+        logger.info(f"📱 Teléfono detectado: {saved_phone}")
+
+    # City extraction: detect common Mexican city patterns
+    _city_patterns = [
+        r'(?:de|en|desde|vivo en|soy de|ciudad)\s+([A-ZÁÉÍÓÚÑa-záéíóúñ]+(?:[,\s]+[A-ZÁÉÍÓÚÑa-záéíóúñ]+){0,3})',
+    ]
+    # Direct city reply: if bot asked for city and reply is 1-4 words with no numbers
+    if history:
+        _last_bot = ""
+        for _hl in reversed(history.strip().split("\n")):
+            if _hl.startswith("A: "):
+                _last_bot = _hl.lower()
+                break
+        _city_asking = ["ciudad", "de dónde", "de donde", "localidad", "estado", "ubicación"]
+        if any(k in _last_bot for k in _city_asking):
+            _words = user_message.strip().split()
+            if 1 <= len(_words) <= 5 and not re.search(r'\d', user_message):
+                saved_city = user_message.strip()
+                logger.info(f"🏙️ Ciudad detectada por contexto: {saved_city}")
+    # Also check explicit patterns
+    if not saved_city:
+        for _cp in _city_patterns:
+            _cm = re.search(_cp, user_message, re.IGNORECASE)
+            if _cm:
+                _candidate_city = _cm.group(1).strip()
+                if len(_candidate_city) > 2 and _candidate_city.lower() not in {"si", "no", "ok"}:
+                    saved_city = _candidate_city
+                    logger.info(f"🏙️ Ciudad detectada: {saved_city}")
+                    break
 
     # Time and date
     now_dt, current_time_str = get_mexico_time()
@@ -2076,6 +2120,20 @@ async def handle_message(
 
     last_bot_section = f"TU ÚLTIMO MENSAJE (NO REPETIR): {last_bot_msg[:200]}\n" if last_bot_msg else ""
 
+    # Build collected-data section so GPT knows what it already has
+    _collected_items = []
+    if saved_email:
+        _collected_items.append(f"EMAIL: {saved_email}")
+    if saved_phone:
+        _collected_items.append(f"TELÉFONO: {saved_phone}")
+    if saved_city:
+        _collected_items.append(f"CIUDAD: {saved_city}")
+    _collected_section = ""
+    if _collected_items:
+        _collected_section = (
+            "DATOS YA RECOPILADOS (NO volver a pedir): " + " | ".join(_collected_items) + "\n"
+        )
+
     context_block = (
         f"TURNO: {turn_count} {'(PRIMER MENSAJE - puedes saludar)' if turn_count == 1 else '(NO saludes, ve directo al punto)'}\n"
         f"MOMENTO ACTUAL: {current_time_str}\n"
@@ -2083,6 +2141,7 @@ async def handle_message(
         f"INTERÉS DETECTADO: {last_interest or '(Sin modelo)'}\n"
         f"CITA DETECTADA: {last_appointment or '(Sin cita)'}\n"
         f"PAGO DETECTADO: {last_payment or '(Por definir)'}\n"
+        f"{_collected_section}"
         f"{last_bot_section}"
         f"{tracking_context}"
         f"{ad_context_section}"
@@ -2114,40 +2173,64 @@ async def handle_message(
         if inferred_interest:
             last_interest = inferred_interest
 
-        # Extract optional JSON from the model (inside ```json ... ```)
-        json_match = re.search(r"```json\s*({.*?})\s*```", raw_reply, flags=re.DOTALL | re.IGNORECASE)
-        if json_match:
-            try:
-                payload = json.loads(json_match.group(1))
-                candidate = payload.get("lead_event") if isinstance(payload, dict) else None
+        # Extract ALL JSON blocks from the model (inside ```json ... ```)
+        # Use finditer to catch multiple blocks (e.g. lead_event + campaign_data separately)
+        json_matches = list(re.finditer(r"```json\s*(\{.*?\})\s*```", raw_reply, flags=re.DOTALL | re.IGNORECASE))
 
-                if isinstance(candidate, dict):
-                    # Inject what we already know
-                    if not str(candidate.get("nombre", "")).strip() and saved_name:
-                        candidate["nombre"] = saved_name
-                    if not str(candidate.get("interes", "")).strip() and last_interest:
-                        candidate["interes"] = last_interest
-                    if not str(candidate.get("cita", "")).strip() and last_appointment:
-                        candidate["cita"] = last_appointment
-                    if not str(candidate.get("pago", "")).strip() and last_payment:
-                        candidate["pago"] = last_payment
+        # Fallback: catch JSON blocks without proper backticks (e.g. "json\n{...}")
+        if not json_matches:
+            json_matches = list(re.finditer(
+                r"(?:^|\n)\s*json\s*\n\s*(\{.*?\})\s*(?:\n|$)",
+                raw_reply, flags=re.DOTALL | re.IGNORECASE,
+            ))
 
-                    if _lead_is_valid(candidate):
-                        lead_info = candidate
-                        logger.info(f"✅ Lead extraído del JSON de OpenAI: {candidate}")
-                    else:
-                        logger.warning(f"Lead JSON discarded (incomplete): {candidate}")
+        if json_matches:
+            for json_match in json_matches:
+                try:
+                    payload = json.loads(json_match.group(1))
+                    candidate = payload.get("lead_event") if isinstance(payload, dict) else None
 
-                # Extract campaign_data if present (independent of lead_event)
-                campaign_data_payload = payload.get("campaign_data") if isinstance(payload, dict) else None
-                if isinstance(campaign_data_payload, dict) and campaign_data_payload.get("resumen"):
-                    logger.info(f"📋 Campaign data extraído: {campaign_data_payload['resumen']}")
+                    if isinstance(candidate, dict):
+                        # Inject what we already know
+                        if not str(candidate.get("nombre", "")).strip() and saved_name:
+                            candidate["nombre"] = saved_name
+                        if not str(candidate.get("interes", "")).strip() and last_interest:
+                            candidate["interes"] = last_interest
+                        if not str(candidate.get("cita", "")).strip() and last_appointment:
+                            candidate["cita"] = last_appointment
+                        if not str(candidate.get("pago", "")).strip() and last_payment:
+                            candidate["pago"] = last_payment
 
-                # Hide JSON from user-facing message
-                reply_clean = raw_reply.replace(json_match.group(0), "").strip()
-            except Exception as e:
-                logger.error(f"Error parseando JSON de lead: {e}")
-                reply_clean = raw_reply.replace(json_match.group(0), "").strip()
+                        if _lead_is_valid(candidate):
+                            lead_info = candidate
+                            logger.info(f"✅ Lead extraído del JSON de OpenAI: {candidate}")
+                        else:
+                            logger.warning(f"Lead JSON discarded (incomplete): {candidate}")
+
+                    # Extract campaign_data if present (independent of lead_event)
+                    cd = payload.get("campaign_data") if isinstance(payload, dict) else None
+                    if isinstance(cd, dict) and cd.get("resumen"):
+                        campaign_data_payload = cd
+                        logger.info(f"📋 Campaign data extraído: {cd['resumen']}")
+                except Exception as e:
+                    logger.error(f"Error parseando JSON de lead: {e}")
+
+            # Hide ALL matched JSON blocks from user-facing message
+            reply_clean = raw_reply
+            for json_match in json_matches:
+                reply_clean = reply_clean.replace(json_match.group(0), "")
+            reply_clean = reply_clean.strip()
+
+        # Final safety net: strip any remaining JSON-like blocks that GPT may have leaked
+        # Catches patterns like: json\n{ ... } or bare { "campaign_data": ... }
+        reply_clean = re.sub(
+            r'(?:^|\n)\s*json\s*\n\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}\s*',
+            '', reply_clean, flags=re.DOTALL | re.IGNORECASE,
+        ).strip()
+        reply_clean = re.sub(
+            r'\{\s*"(?:campaign_data|lead_event)"\s*:\s*\{[^}]*\}\s*\}',
+            '', reply_clean, flags=re.DOTALL,
+        ).strip()
 
     except Exception as e:
         logger.error(f"OpenAI error: {e}")
@@ -2168,6 +2251,9 @@ async def handle_message(
         "last_interest": last_interest,
         "last_appointment": last_appointment,
         "last_payment": last_payment,
+        "user_email": saved_email,
+        "user_phone": saved_phone,
+        "user_city": saved_city,
         "turn_count": turn_count,
         # Mantener valores previos de fotos si existen
         "photo_model": context.get("photo_model"),
