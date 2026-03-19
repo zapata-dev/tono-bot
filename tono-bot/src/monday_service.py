@@ -913,6 +913,20 @@ class MondayService:
         return item_id
 
     # ============================================================
+    # ============================================================
+    # ADD NOTE TO ITEM (campaign data, etc.)
+    # ============================================================
+    async def add_note_to_item(self, item_id: int, body: str) -> None:
+        """Adds an update/note to an existing Monday.com item."""
+        if not self.api_key or not item_id or not body:
+            return
+        query = 'mutation ($item_id: ID!, $body: String!) { create_update (item_id: $item_id, body: $body) { id } }'
+        try:
+            await self._graphql(query, {"item_id": str(item_id), "body": body})
+            logger.info(f"📋 Nota agregada a item {item_id}")
+        except Exception as e:
+            logger.error(f"⚠️ Error agregando nota a item {item_id}: {e}")
+
     # V3: ANUNCIOS BOARD - Tracking ID lookup + Connect Boards
     # ============================================================
     async def find_anuncio_by_tracking_id(self, tracking_id: str) -> dict | None:

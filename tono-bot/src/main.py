@@ -893,6 +893,24 @@ async def _process_accumulated_messages(bot_state: GlobalState, remote_jid: str)
                 except Exception as e:
                     logger.error(f"❌ Error actualizando funnel en Monday: {e}")
 
+            # === CAMPAIGN DATA: Guardar datos de campaña como nota en Monday ===
+            campaign_data = result.get("campaign_data")
+            if campaign_data and isinstance(campaign_data, dict) and campaign_data.get("resumen"):
+                try:
+                    phone = remote_jid.split("@")[0]
+                    sanitized = monday_service._sanitize_phone(phone)
+                    existing_item = await monday_service._find_item_by_phone(sanitized)
+                    if existing_item:
+                        await monday_service.add_note_to_item(
+                            int(existing_item["id"]),
+                            f"📋 Datos de campaña:\n{campaign_data['resumen']}"
+                        )
+                        logger.info(f"📋 Campaign data guardado en Monday para {phone}")
+                    else:
+                        logger.warning(f"📋 Campaign data recibido pero no hay item en Monday para {phone}")
+                except Exception as e:
+                    logger.error(f"⚠️ Error guardando campaign data en Monday: {e}")
+
             # Lead calificado - notificar
             # Get referral source and tracking ID for alerts
             result_ctx = result.get("context", context) or {}

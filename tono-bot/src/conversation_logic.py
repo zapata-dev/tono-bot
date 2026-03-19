@@ -200,9 +200,11 @@ REGLAS OBLIGATORIAS:
 - NO des explicaciones largas ni definiciones.
 - Si no sabes algo: "Eso lo confirmo y te aviso."
 
-6) ANTI-REPETICIÓN:
+6) ANTI-REPETICIÓN (PRIORIDAD MÁXIMA — incluso sobre instrucciones de campaña):
+- NUNCA repitas un mensaje anterior textualmente ni con paráfrasis mínima. Revisa tu ÚLTIMO MENSAJE en el HISTORIAL.
+- Si ya pediste datos (correo, ciudad, etc.) y el cliente NO los dio sino que PREGUNTÓ algo: PRIMERO responde su pregunta, LUEGO re-pide los datos con diferente redacción.
+- Si el cliente dice "qué?", "cómo?", "no entiendo": EXPLICA con otras palabras qué necesitas y POR QUÉ.
 - NUNCA preguntes algo que ya sabes.
-- Revisa HISTORIAL antes de responder.
 
 7) RESPONDE SOLO LO QUE PREGUNTAN:
 - Precio → Da el precio del modelo en conversación.
@@ -283,6 +285,19 @@ REGLAS OBLIGATORIAS:
   }}
 }}
 ```
+
+14b) DATOS DE CAMPAÑA (JSON):
+- Si hay CAMPAÑA ACTIVA y el cliente proporcionó TODOS los datos que pide la campaña, genera:
+```json
+{{
+  "campaign_data": {{
+    "resumen": "Email: x@y.com | Ciudad: Nayarit | Propuesta: $821,000 | Plazo: 6 meses"
+  }}
+}}
+```
+- Este JSON es INDEPENDIENTE del lead_event (no necesita cita confirmada).
+- Solo genera cuando tengas TODOS los datos solicitados por la campaña.
+- El "resumen" debe listar cada dato con su etiqueta, separados por " | ".
 
 15) TOMA A CUENTA / TRADE-IN:
 - Si el cliente pregunta si reciben su vehículo actual a cuenta, en intercambio, o como enganche:
@@ -1865,6 +1880,8 @@ async def handle_message(
                 f"*** FIN INSTRUCCIONES DE CAMPAÑA ***\n"
                 f"IMPORTANTE: Para este cliente, SIGUE las instrucciones de campaña. "
                 f"NO uses precio ni condiciones del inventario general para esta unidad.\n"
+                f"RECORDATORIO: Las instrucciones de campaña NO te autorizan a repetir el mismo mensaje. "
+                f"Si ya pediste datos y el cliente preguntó algo, responde su pregunta primero.\n"
             )
         else:
             tracking_context = (
@@ -1920,6 +1937,16 @@ async def handle_message(
         except Exception as e:
             logger.error(f"⚠️ Error cargando campañas para prompt: {e}")
 
+    # Extraer último mensaje del bot del historial para anti-repetición
+    last_bot_msg = ""
+    if history:
+        for _line in reversed(history.strip().split("\n")):
+            if _line.startswith("A: "):
+                last_bot_msg = _line[3:].strip()
+                break
+
+    last_bot_section = f"TU ÚLTIMO MENSAJE (NO REPETIR): {last_bot_msg[:200]}\n" if last_bot_msg else ""
+
     context_block = (
         f"TURNO: {turn_count} {'(PRIMER MENSAJE - puedes saludar)' if turn_count == 1 else '(NO saludes, ve directo al punto)'}\n"
         f"MOMENTO ACTUAL: {current_time_str}\n"
@@ -1927,6 +1954,7 @@ async def handle_message(
         f"INTERÉS DETECTADO: {last_interest or '(Sin modelo)'}\n"
         f"CITA DETECTADA: {last_appointment or '(Sin cita)'}\n"
         f"PAGO DETECTADO: {last_payment or '(Por definir)'}\n"
+        f"{last_bot_section}"
         f"{tracking_context}"
         f"{ad_context_section}"
         f"{campaigns_section}"
@@ -1943,6 +1971,7 @@ async def handle_message(
     ]
 
     lead_info: Optional[Dict[str, Any]] = None
+    campaign_data_payload: Optional[Dict[str, Any]] = None
     reply_clean = "Hubo un error técnico."
 
     try:
@@ -1979,6 +2008,11 @@ async def handle_message(
                         logger.info(f"✅ Lead extraído del JSON de OpenAI: {candidate}")
                     else:
                         logger.warning(f"Lead JSON discarded (incomplete): {candidate}")
+
+                # Extract campaign_data if present (independent of lead_event)
+                campaign_data_payload = payload.get("campaign_data") if isinstance(payload, dict) else None
+                if isinstance(campaign_data_payload, dict) and campaign_data_payload.get("resumen"):
+                    logger.info(f"📋 Campaign data extraído: {campaign_data_payload['resumen']}")
 
                 # Hide JSON from user-facing message
                 reply_clean = raw_reply.replace(json_match.group(0), "").strip()
@@ -2143,4 +2177,5 @@ async def handle_message(
             "turn_count": turn_count,
         },
         "pdf_info": pdf_info,
+        "campaign_data": campaign_data_payload,
     }
