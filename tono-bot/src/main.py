@@ -732,6 +732,13 @@ async def _process_accumulated_messages(bot_state: GlobalState, remote_jid: str)
                     context["referral_source"] = f"Ad Tracking: {new_tid}"
                     logger.info(f"🏷️ Tracking ID {'actualizado' if old_tid else 'guardado'} en contexto: {new_tid} → {pending_track['vehicle_label']}")
 
+            # === Auto-populate phone from WhatsApp JID ===
+            # No need to ask the client for their phone — we already have it
+            if not context.get("user_phone"):
+                _jid_phone = remote_jid.split("@")[0] if "@" in remote_jid else ""
+                if _jid_phone:
+                    context["user_phone"] = _jid_phone
+
             # === Strip tracking ID from message before GPT ===
             # Prevents GPT from echoing the code in its response
             if context.get("tracking_id"):

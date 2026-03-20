@@ -1888,7 +1888,7 @@ async def handle_message(
 
     # City extraction: detect common Mexican city patterns
     _city_patterns = [
-        r'(?:de|en|desde|vivo en|soy de|ciudad)\s+([A-ZÁÉÍÓÚÑa-záéíóúñ]+(?:[,\s]+[A-ZÁÉÍÓÚÑa-záéíóúñ]+){0,3})',
+        r'\b(?:de|en|desde|vivo en|soy de|ciudad)\s+([A-ZÁÉÍÓÚÑa-záéíóúñ]+(?:[,\s]+[A-ZÁÉÍÓÚÑa-záéíóúñ]+){0,3})',
     ]
     # Words that are vehicle/ad terms, NOT cities — reject if city candidate contains any
     _city_noise = {
@@ -1896,6 +1896,11 @@ async def handle_message(
         "pickup", "camioneta", "camion", "tracto", "van", "g7", "g9", "e5",
         "anuncio", "anuncion", "foto", "fotos", "modelo", "unidad",
         "freightliner", "tractocamion", "volteo", "truck", "trailer",
+        # Plurals
+        "camiones", "tractos", "camionetas", "tractocamiones",
+        # Common non-city words that slip through
+        "te", "doy", "bien", "tienes", "mas", "quiero", "este", "ese",
+        "mil", "pesos", "si", "no", "precio", "oferta", "propuesta",
     }
     _last_bot = ""
     # Direct city reply: if bot asked for city and reply is short with no numbers
@@ -1911,11 +1916,11 @@ async def handle_message(
             _city_candidates = _msg_lines if _is_multiline else [user_message.strip()]
             for _city_line in _city_candidates:
                 _words = _city_line.split()
-                if 1 <= len(_words) <= 5 and not re.search(r'\d', _city_line):
+                if 1 <= len(_words) <= 5 and not re.search(r'\d', _city_line) and "?" not in _city_line:
                     # Skip lines that look like email or name (already captured)
                     if "@" not in _city_line and _city_line != extracted_name:
-                        # Reject if any word is a vehicle/ad term
-                        if set(_city_line.lower().split()) & _city_noise:
+                        # Reject if any word is a vehicle/ad term (strip punctuation first)
+                        if {w.rstrip("?!.,;:") for w in _city_line.lower().split()} & _city_noise:
                             continue
                         saved_city = _city_line
                         logger.info(f"🏙️ Ciudad detectada por contexto: {saved_city}")
@@ -1927,8 +1932,8 @@ async def handle_message(
             if _cm:
                 _candidate_city = _cm.group(1).strip()
                 if len(_candidate_city) > 2 and _candidate_city.lower() not in {"si", "no", "ok"}:
-                    # Reject if any word is a vehicle/ad term
-                    _candidate_words = set(_candidate_city.lower().split())
+                    # Reject if any word is a vehicle/ad term (strip punctuation first)
+                    _candidate_words = {w.rstrip("?!.,;:") for w in _candidate_city.lower().split()}
                     if _candidate_words & _city_noise:
                         logger.info(f"🏙️ Ciudad descartada (palabra de vehículo): {_candidate_city}")
                         continue
@@ -1941,15 +1946,15 @@ async def handle_message(
         if any(k in _last_bot for k in _data_asking):
             for _city_line in _msg_lines:
                 _words = _city_line.split()
-                if 1 <= len(_words) <= 4 and not re.search(r'[\d@]', _city_line):
+                if 1 <= len(_words) <= 4 and not re.search(r'[\d@]', _city_line) and "?" not in _city_line:
                     # Skip if it looks like the name we already extracted
                     if extracted_name and _city_line.lower() == extracted_name.lower():
                         continue
                     # Skip common time expressions
                     if any(k in _city_line.lower() for k in ["mes", "semana", "día", "año"]):
                         continue
-                    # Reject if any word is a vehicle/ad term
-                    if set(_city_line.lower().split()) & _city_noise:
+                    # Reject if any word is a vehicle/ad term (strip punctuation first)
+                    if {w.rstrip("?!.,;:") for w in _city_line.lower().split()} & _city_noise:
                         continue
                     saved_city = _city_line
                     logger.info(f"🏙️ Ciudad detectada (multi-línea): {saved_city}")
@@ -2261,7 +2266,7 @@ async def handle_message(
     if saved_email:
         _collected_items.append(f"EMAIL: {saved_email}")
     if saved_phone:
-        _collected_items.append(f"TELÉFONO: {saved_phone}")
+        _collected_items.append(f"TELÉFONO: {saved_phone} (ya lo tienes, NO lo pidas)")
     if saved_city:
         _collected_items.append(f"CIUDAD: {saved_city}")
     _collected_section = ""
