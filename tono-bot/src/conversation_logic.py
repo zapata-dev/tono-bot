@@ -1653,7 +1653,6 @@ def _pick_media_urls(
         if best:
             target_item = best
             target_model_name = _safe_get(best, ["Modelo", "modelo", "id_modelo"]).strip()
-                break
 
     if not target_item:
         return []
