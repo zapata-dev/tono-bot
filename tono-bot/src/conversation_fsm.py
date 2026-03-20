@@ -356,7 +356,7 @@ def extract_entities_for_fsm(
         extracted["appointment"] = appointment
 
     # --- OFFER AMOUNT ---
-    offer = _extract_offer(user_message)
+    offer = _extract_offer(user_message, history)
     if offer:
         extracted["offer_amount"] = offer
 
@@ -568,20 +568,67 @@ def _extract_appointment(text: str) -> Optional[str]:
     return None
 
 
-def _extract_offer(text: str) -> Optional[str]:
-    """Extract offer amount from message."""
+def _format_offer_amount(raw: str) -> Optional[str]:
+    """Normalize a numeric offer string into MXN display format."""
+    digits = re.sub(r"[^\d]", "", raw or "")
+    if not digits.isdigit():
+        return None
+
+    val = int(digits)
+    if val <= 0:
+        return None
+
+    # In these campaign chats, short amounts like "700" mean $700,000.
+    if val < 10000:
+        val *= 1000
+
+    # Guard against phone numbers or absurdly large accidental values.
+    if val < 100000 or val > 100000000:
+        return None
+
+    return f"${val:,}"
+
+
+def _extract_offer(text: str, history: str = "") -> Optional[str]:
+    """Extract offer amount from message.
+
+    Supports:
+    - Explicit phrases: "te doy 670 mil", "propuesta de 688000"
+    - Contextual bare numbers after the bot asks for the offer: "688000", "700"
+    """
+    msg = (text or "").strip()
+    if not msg:
+        return None
+
     m = re.search(
-        r'(?:(?:te\s+)?(?:doy|ofrezco|propongo|pongo)|propuesta|oferta)\s*(?:de\s+)?\$?\s*(\d[\d,\.]*)\s*(?:mil|k)?'
-        r'|\$?\s*(\d[\d,\.]*)\s*(?:mil|k)\b',
-        text or "", re.IGNORECASE
+        r'(?:(?:te\s+)?(?:doy|ofrezco|propongo|pongo)|propuesta|oferta|monto)\s*(?:de\s+)?\$?\s*(\d[\d,\.]*)\s*(?:mil|k|pesos?)?'
+        r'|\$?\s*(\d[\d,\.]*)\s*(?:mil|k|pesos?)\b',
+        msg, re.IGNORECASE
     )
     if m:
-        raw = (m.group(1) or m.group(2) or "").replace(",", "").replace(".", "")
-        if raw.isdigit():
-            val = int(raw)
-            if val < 10000:
-                val *= 1000
-            return f"${val:,}"
+        formatted = _format_offer_amount(m.group(1) or m.group(2) or "")
+        if formatted:
+            return formatted
+
+    # If the bot just asked for the proposal amount, accept a bare numeric reply.
+    last_bot = ""
+    if history:
+        for line in reversed(history.split("\n")):
+            if line.strip().startswith("A:"):
+                last_bot = line.lower()
+                break
+
+    offer_asking = ["propuesta", "oferta", "monto", "cuánto sería", "cuanto sería"]
+    bot_asked_offer = any(k in last_bot for k in offer_asking)
+    if bot_asked_offer:
+        contextual_amount = re.fullmatch(
+            r'(?:que\s+)?(?:(?:son|es)\s+)?\$?\s*(\d[\d,\.\s]{0,9})\s*(?:pesos?)?\s*',
+            msg,
+            re.IGNORECASE,
+        )
+        if contextual_amount:
+            return _format_offer_amount(contextual_amount.group(1))
+
     return None
 
 

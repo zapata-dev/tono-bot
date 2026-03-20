@@ -2197,8 +2197,8 @@ async def handle_message(
     # Extract offer amount for campaigns (e.g., "te doy 670 mil" → "$670,000")
     extracted_offer = None
     _offer_pat = re.search(
-        r'(?:(?:te\s+)?(?:doy|ofrezco|propongo|pongo)|propuesta|oferta)\s*(?:de\s+)?\$?\s*(\d[\d,\.]*)\s*(?:mil|k)?'
-        r'|\$?\s*(\d[\d,\.]*)\s*(?:mil|k)\b',
+        r'(?:(?:te\s+)?(?:doy|ofrezco|propongo|pongo)|propuesta|oferta|monto)\s*(?:de\s+)?\$?\s*(\d[\d,\.]*)\s*(?:mil|k|pesos?)?'
+        r'|\$?\s*(\d[\d,\.]*)\s*(?:mil|k|pesos?)\b',
         user_message, re.IGNORECASE
     )
     if _offer_pat:
@@ -2209,6 +2209,27 @@ async def handle_message(
                 _val *= 1000
             extracted_offer = f"${_val:,}"
             logger.info(f"💰 Oferta detectada: {extracted_offer}")
+    elif history:
+        _last_bot_offer = ""
+        for _line in reversed(history.split("\n")):
+            if _line.strip().startswith("A:"):
+                _last_bot_offer = _line.lower()
+                break
+        if any(_k in _last_bot_offer for _k in ("propuesta", "oferta", "monto", "cuánto sería", "cuanto sería")):
+            _contextual_offer = re.fullmatch(
+                r'(?:que\s+)?(?:(?:son|es)\s+)?\$?\s*(\d[\d,\.\s]{0,9})\s*(?:pesos?)?\s*',
+                user_message.strip(),
+                re.IGNORECASE,
+            )
+            if _contextual_offer:
+                _raw = re.sub(r"[^\d]", "", _contextual_offer.group(1))
+                if _raw.isdigit():
+                    _val = int(_raw)
+                    if _val < 10000:
+                        _val *= 1000
+                    if 100000 <= _val <= 100000000:
+                        extracted_offer = f"${_val:,}"
+                        logger.info(f"💰 Oferta detectada por contexto: {extracted_offer}")
 
     # Build dict of freshly extracted data for FSM
     _new_extracted_data: Dict[str, str] = {}

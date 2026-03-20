@@ -599,6 +599,63 @@ def test_regular_campaign_no_offer_required():
 
 
 # ============================================================
+# CASE 33: bare numeric reply after ASK_OFFER → saves offer
+# ============================================================
+def test_offer_extraction_from_bare_number_after_offer_prompt():
+    """'688000' should be captured as offer_amount when bot just asked for it."""
+    history = "A: ¿Cuál es tu monto de tu propuesta?"
+    e = extract_entities_for_fsm("688000", history, {})
+    assert e.get("offer_amount") == "$688,000", f"Expected $688,000, got: {e}"
+    print("✅ CASE 33: bare numeric reply captured as offer_amount")
+
+
+def test_offer_extraction_from_que_son_after_offer_prompt():
+    """'Que son 688000' should still be captured as offer_amount in offer context."""
+    history = "A: ¿Cuál es tu monto de tu propuesta?"
+    e = extract_entities_for_fsm("Que son 688000", history, {})
+    assert e.get("offer_amount") == "$688,000", f"Expected $688,000, got: {e}"
+    print("✅ CASE 33a: 'Que son 688000' captured as contextual offer_amount")
+
+
+def test_su_campaign_offer_then_timeline_confirms():
+    """SU campaign should not re-ask offer after a bare numeric amount was already given."""
+    context = {"fsm_state": "campaign_entry", "last_interest": "Cascadia",
+               "tracking_data": {"campaign_type": "SU"}}
+    context["user_name"] = "Alan"
+    context["user_email"] = "alan@test.com"
+    context["user_city"] = "San Jose"
+
+    # User gives bare numeric offer after being asked for monto
+    offer_data = extract_entities_for_fsm("688000", "A: ¿Cuál es tu monto de tu propuesta?", context)
+    action, state, slots, meta = process_fsm(
+        user_message="688000",
+        context=context,
+        new_data=offer_data,
+        has_campaign=True,
+        turn_count=5,
+        campaign_type="SU",
+    )
+    assert slots.offer_amount == "$688,000", f"Offer should be saved, got: {slots.offer_amount}"
+    assert action == Action.ACKNOWLEDGE_AND_ASK_NEXT, f"Expected ACK after offer, got: {action}"
+    assert meta.get("next_slot") == "timeline", f"Should ask timeline next, got: {meta}"
+
+    # After timeline, campaign should confirm instead of re-asking monto
+    timeline_data = extract_entities_for_fsm("1 mes", "A: ¿Cuál sería tu tiempo estimado para liquidar?", context)
+    action2, state2, slots2, meta2 = process_fsm(
+        user_message="1 mes",
+        context=context,
+        new_data=timeline_data,
+        has_campaign=True,
+        turn_count=6,
+        campaign_type="SU",
+    )
+    assert action2 == Action.CONFIRM_REGISTRATION, f"Should confirm after timeline, got: {action2}"
+    assert state2 == ConversationState.QUALIFIED, f"Should end qualified, got: {state2}"
+    assert slots2.offer_amount == "$688,000", f"Offer should persist, got: {slots2.offer_amount}"
+    print("✅ CASE 33b: SU campaign confirms after offer + timeline without re-asking")
+
+
+# ============================================================
 # RUN ALL
 # ============================================================
 if __name__ == "__main__":
@@ -647,6 +704,9 @@ if __name__ == "__main__":
         test_name_rejects_conversational,
         test_city_normalization,
         test_regular_campaign_no_offer_required,
+        test_offer_extraction_from_bare_number_after_offer_prompt,
+        test_offer_extraction_from_que_son_after_offer_prompt,
+        test_su_campaign_offer_then_timeline_confirms,
     ]
 
     passed = 0
