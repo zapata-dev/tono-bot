@@ -929,6 +929,104 @@ def _extract_photos_from_item(item: Dict[str, Any]) -> List[str]:
     return [u.strip() for u in raw.split("|") if u.strip().startswith("http")]
 
 
+def _extract_location_link(
+    inventory_service, last_interest: str, interest_ubicacion: str = ""
+) -> Optional[str]:
+    """Extract ubicacion_link from inventory for the model of interest.
+    If interest_ubicacion is provided, prefer the item matching both model
+    and the specific unit's location.
+    """
+    items = getattr(inventory_service, "items", None) or []
+    if not items or not last_interest:
+        return None
+
+    interest_norm = _normalize_spanish(last_interest)
+    interest_tokens = [t for t in interest_norm.split() if len(t) >= 2
+                       and t not in {"foton", "freightliner", "camion", "camión"}]
+    if not interest_tokens:
+        return None
+
+    ubic_norm = _normalize_spanish(interest_ubicacion) if interest_ubicacion else ""
+    best_link = None
+
+    for item in items:
+        modelo = _safe_get(item, ["Modelo", "modelo", "id_modelo"]).strip()
+        if not modelo:
+            continue
+        modelo_norm = _normalize_spanish(modelo)
+        if not any(tok in modelo_norm for tok in interest_tokens):
+            continue
+
+        link = _safe_get(item, ["ubicacion_link"])
+        if not link:
+            continue
+
+        # If unit location matches, return immediately (best match)
+        if ubic_norm:
+            item_ubic = _normalize_spanish(_safe_get(item, ["ubicacion", "Ubicacion", "ubicación"]))
+            if ubic_norm in item_ubic or item_ubic in ubic_norm:
+                return link
+
+        # Otherwise store as fallback
+        if not best_link:
+            best_link = link
+
+    return best_link
+
+
+def _detect_vehicle_ubicacion(
+    user_message: str, inventory_service, last_interest: str
+) -> Optional[str]:
+    """Detect if the user mentions a location that matches a specific inventory
+    item's ubicacion for the model of interest.
+
+    E.g. "Cascadia de León" → returns "León" (the unit's location, not the client's city).
+    Only returns a value when there are multiple units of the same model in
+    different locations, so disambiguation is meaningful.
+    """
+    items = getattr(inventory_service, "items", None) or []
+    if not items or not last_interest:
+        return None
+
+    interest_norm = _normalize_spanish(last_interest)
+    interest_tokens = [t for t in interest_norm.split() if len(t) >= 2
+                       and t not in {"foton", "freightliner", "camion", "camión"}]
+    if not interest_tokens:
+        return None
+
+    msg_norm = _normalize_spanish(user_message)
+
+    # Collect ubicaciones for matching model items
+    model_ubicaciones: List[str] = []
+    for item in items:
+        modelo = _safe_get(item, ["Modelo", "modelo", "id_modelo"]).strip()
+        if not modelo:
+            continue
+        modelo_norm = _normalize_spanish(modelo)
+        if not any(tok in modelo_norm for tok in interest_tokens):
+            continue
+        ubic = _safe_get(item, ["ubicacion", "Ubicacion", "ubicación"]).strip()
+        if ubic:
+            model_ubicaciones.append(ubic)
+
+    # Only disambiguate if there are multiple distinct locations
+    unique_locations = list({_normalize_spanish(u) for u in model_ubicaciones})
+    if len(unique_locations) < 2:
+        return None
+
+    # Check if user message mentions any of these locations
+    for ubic_raw, ubic_norm in zip(model_ubicaciones, [_normalize_spanish(u) for u in model_ubicaciones]):
+        # Extract city-like tokens from the ubicacion (e.g. "Zapata Camiones León" → "leon")
+        ubic_tokens = [t for t in ubic_norm.split() if len(t) >= 3
+                       and t not in {"zapata", "camiones", "tractos", "max", "sucursal"}]
+        for tok in ubic_tokens:
+            if re.search(r'\b' + re.escape(tok) + r'\b', msg_norm):
+                logger.info(f"📍 Vehicle ubicacion detected from message: '{ubic_raw}' (token: '{tok}')")
+                return ubic_raw
+
+    return None
+
+
 # ============================================================
 # NAME / PAYMENT / APPOINTMENT EXTRACTION
 # ============================================================
@@ -1451,6 +1549,21 @@ def _pick_media_urls(
 
     rep_norm = _normalize_spanish(reply)
 
+    # Vehicle ubicacion from context — identifies which specific unit the user wants
+    interest_ubicacion = _normalize_spanish((context.get("interest_ubicacion") or "").strip())
+
+    def _prefer_unit_item(candidates: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Among matching items, prefer the one whose ubicacion matches the unit of interest."""
+        if not candidates:
+            return None
+        if not interest_ubicacion:
+            return candidates[0]
+        for c in candidates:
+            ubic = _normalize_spanish(_safe_get(c, ["ubicacion", "Ubicacion", "ubicación"]))
+            if interest_ubicacion in ubic or ubic in interest_ubicacion:
+                return c
+        return candidates[0]  # fallback to first if no ubicacion match
+
     # 4) Detectar qué modelo quiere ver
     target_item = None
     target_model_name = ""
@@ -1466,12 +1579,15 @@ def _pick_media_urls(
 
         # Verificar si el mensaje menciona el modelo de interés (word boundary)
         if any(re.search(r'\b' + re.escape(tok) + r'\b', msg) for tok in interest_tokens):
+            matching_items = []
             for item in items:
                 modelo = _safe_get(item, ["Modelo", "modelo", "id_modelo"]).strip()
                 if _normalize_spanish(modelo) == interest_norm or any(tok in _normalize_spanish(modelo) for tok in interest_tokens):
-                    target_item = item
-                    target_model_name = modelo
-                    break
+                    matching_items.append(item)
+            best = _prefer_unit_item(matching_items)
+            if best:
+                target_item = best
+                target_model_name = _safe_get(best, ["Modelo", "modelo", "id_modelo"]).strip()
 
     # B) PRIORIDAD 2: Buscar mención explícita en mensaje o respuesta del bot (con scoring)
     if not target_item:
@@ -1509,6 +1625,12 @@ def _pick_media_urls(
                 if pat.search(rep_norm):
                     score += 1  # Match en respuesta del bot = menor prioridad
 
+            # Unit location bonus: prefer items matching the vehicle ubicacion of interest
+            if score > 0 and interest_ubicacion:
+                ubic = _normalize_spanish(_safe_get(item, ["ubicacion", "Ubicacion", "ubicación"]))
+                if interest_ubicacion in ubic or ubic in interest_ubicacion:
+                    score += 0.5  # Small bonus to prefer location match without overriding model match
+
             if score > best_score:
                 best_score = score
                 best_item = item
@@ -1522,11 +1644,15 @@ def _pick_media_urls(
     if not target_item and last_interest:
         # Strip year from last_interest for comparison (e.g. "ESTA 6X4 11.8 2023" → "ESTA 6X4 11.8")
         interest_no_year = re.sub(r'\s+20\d{2}$', '', last_interest).strip()
+        matching_items = []
         for item in items:
             modelo = _safe_get(item, ["Modelo", "modelo", "id_modelo"]).strip()
             if _normalize_spanish(modelo) == _normalize_spanish(interest_no_year):
-                target_item = item
-                target_model_name = modelo
+                matching_items.append(item)
+        best = _prefer_unit_item(matching_items)
+        if best:
+            target_item = best
+            target_model_name = _safe_get(best, ["Modelo", "modelo", "id_modelo"]).strip()
                 break
 
     if not target_item:
@@ -1534,7 +1660,8 @@ def _pick_media_urls(
 
     # 5) Extraer fotos
     urls = _extract_photos_from_item(target_item)
-    logger.info(f"📸 Fotos seleccionadas: modelo='{target_model_name}', {len(urls)} URLs, last_interest='{last_interest}'")
+    item_ubic = _safe_get(target_item, ["ubicacion", "Ubicacion", "ubicación"])
+    logger.info(f"📸 Fotos seleccionadas: modelo='{target_model_name}', {len(urls)} URLs, last_interest='{last_interest}', ubicacion='{item_ubic}'")
     if not urls:
         return []
 
@@ -1823,6 +1950,13 @@ async def _handle_message_fsm(
     has_campaign = bool(campaign and campaign.instructions)
     campaign_type = (context.get("tracking_data") or {}).get("campaign_type", "A")
 
+    # Detect vehicle ubicacion from user message (e.g. "Cascadia de León")
+    _interest = slots_data.get("interest") or context.get("last_interest", "")
+    _vehicle_ubic = _detect_vehicle_ubicacion(user_message, inventory_service, _interest)
+    if _vehicle_ubic:
+        context["interest_ubicacion"] = _vehicle_ubic
+        logger.info(f"📍 Vehicle ubicacion stored: {_vehicle_ubic}")
+
     # Run FSM
     action, new_state, slots, meta = process_fsm(
         user_message=user_message,
@@ -1968,6 +2102,16 @@ async def _handle_message_fsm(
             parts.append(f"Plazo: {slots.timeline}")
         campaign_data_payload = {"resumen": " | ".join(parts)}
 
+    # Location link extraction (when user asks for location)
+    location_link = None
+    if meta.get("intent") == "ask_location" and slots.interest:
+        location_link = _extract_location_link(
+            inventory_service, slots.interest,
+            new_context.get("interest_ubicacion", ""),
+        )
+        if location_link:
+            logger.info(f"📍 Location link found: {location_link}")
+
     # Photo selection (reuse existing logic)
     media_urls: List[str] = []
     if action == Action.SEND_PHOTOS:
@@ -2007,6 +2151,7 @@ async def _handle_message_fsm(
         },
         "pdf_info": pdf_info,
         "campaign_data": campaign_data_payload,
+        "location_link": location_link,
         # V2: slot changes for centralized Monday sync
         "slot_changes": [
             {"slot": c.slot, "old": c.old_value, "new": c.new_value}
@@ -2802,7 +2947,15 @@ async def handle_message(
         "referral_data": context.get("referral_data"),
         "tracking_id": context.get("tracking_id"),
         "tracking_data": context.get("tracking_data"),
+        # Vehicle ubicacion: which specific unit is of interest (for photo/location filtering)
+        "interest_ubicacion": context.get("interest_ubicacion"),
     }
+
+    # Detect vehicle ubicacion in legacy path too
+    _vehicle_ubic = _detect_vehicle_ubicacion(user_message, inventory_service, last_interest)
+    if _vehicle_ubic:
+        new_context["interest_ubicacion"] = _vehicle_ubic
+        logger.info(f"📍 Vehicle ubicacion stored (legacy): {_vehicle_ubic}")
 
     # Pasamos new_context (la función lo modificará)
     media_urls = _pick_media_urls(user_message, reply_clean, inventory_service, new_context)

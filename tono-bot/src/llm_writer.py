@@ -94,6 +94,8 @@ _ACTION_PROMPTS: Dict[Action, str] = {
     Action.ANSWER_QUESTION: (
         "ACCIÓN: Responde la pregunta del cliente usando el contexto disponible.\n"
         "Usa el INVENTARIO si es relevante. Sé conciso (máximo 2 oraciones).\n"
+        "Si hay varias unidades del mismo modelo en diferentes ubicaciones, pregunta al cliente cuál le interesa.\n"
+        "Si el cliente pregunta por ubicación, usa la ubicación de la unidad específica del inventario.\n"
         "Si no sabes algo: 'Eso lo confirmo y te aviso.'"
     ),
 
