@@ -5,6 +5,7 @@ import logging
 import asyncio
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple
+import unicodedata
 
 import httpx
 import pytz
@@ -963,8 +964,9 @@ def _extract_location_link(
 
         # If unit location matches, return immediately (best match)
         if ubic_norm:
-            item_ubic = _normalize_spanish(_safe_get(item, ["ubicacion", "Ubicacion", "ubicación"]))
-            if ubic_norm in item_ubic or item_ubic in ubic_norm:
+            item_ubic = _strip_accents(_normalize_spanish(_safe_get(item, ["ubicacion", "Ubicacion", "ubicación"])))
+            ubic_norm_clean = _strip_accents(ubic_norm)
+            if ubic_norm_clean in item_ubic or item_ubic in ubic_norm_clean:
                 return link
 
         # Otherwise store as fallback
@@ -994,7 +996,7 @@ def _detect_vehicle_ubicacion(
     if not interest_tokens:
         return None
 
-    msg_norm = _normalize_spanish(user_message)
+    msg_norm = _strip_accents(_normalize_spanish(user_message))
 
     # Collect ubicaciones for matching model items
     model_ubicaciones: List[str] = []
@@ -1017,7 +1019,8 @@ def _detect_vehicle_ubicacion(
     # Check if user message mentions any of these locations
     for ubic_raw, ubic_norm in zip(model_ubicaciones, [_normalize_spanish(u) for u in model_ubicaciones]):
         # Extract city-like tokens from the ubicacion (e.g. "Zapata Camiones León" → "leon")
-        ubic_tokens = [t for t in ubic_norm.split() if len(t) >= 3
+        ubic_norm_clean = _strip_accents(ubic_norm)
+        ubic_tokens = [t for t in ubic_norm_clean.split() if len(t) >= 3
                        and t not in {"zapata", "camiones", "tractos", "max", "sucursal"}]
         for tok in ubic_tokens:
             if re.search(r'\b' + re.escape(tok) + r'\b', msg_norm):
@@ -1251,6 +1254,14 @@ def _normalize_spanish(text: str) -> str:
         t = re.sub(pattern, replacement, t)
 
     return t
+
+
+def _strip_accents(text: str) -> str:
+    """Remove accents for comparison: León → Leon, Querétaro → Queretaro."""
+    if not text:
+        return text
+    nfkd = unicodedata.normalize('NFKD', text)
+    return ''.join(c for c in nfkd if not unicodedata.combining(c))
 
 
 def _detect_model_switch(user_message: str, current_interest: str, inventory_service) -> Optional[str]:
@@ -1558,9 +1569,10 @@ def _pick_media_urls(
             return None
         if not interest_ubicacion:
             return candidates[0]
+        interest_ubic_clean = _strip_accents(_normalize_spanish(interest_ubicacion))
         for c in candidates:
-            ubic = _normalize_spanish(_safe_get(c, ["ubicacion", "Ubicacion", "ubicación"]))
-            if interest_ubicacion in ubic or ubic in interest_ubicacion:
+            ubic = _strip_accents(_normalize_spanish(_safe_get(c, ["ubicacion", "Ubicacion", "ubicación"])))
+            if interest_ubic_clean in ubic or ubic in interest_ubic_clean:
                 return c
         return candidates[0]  # fallback to first if no ubicacion match
 
@@ -1627,8 +1639,9 @@ def _pick_media_urls(
 
             # Unit location bonus: prefer items matching the vehicle ubicacion of interest
             if score > 0 and interest_ubicacion:
-                ubic = _normalize_spanish(_safe_get(item, ["ubicacion", "Ubicacion", "ubicación"]))
-                if interest_ubicacion in ubic or ubic in interest_ubicacion:
+                ubic = _strip_accents(_normalize_spanish(_safe_get(item, ["ubicacion", "Ubicacion", "ubicación"])))
+                interest_ubic_clean = _strip_accents(_normalize_spanish(interest_ubicacion))
+                if interest_ubic_clean in ubic or ubic in interest_ubic_clean:
                     score += 0.5  # Small bonus to prefer location match without overriding model match
 
             if score > best_score:
