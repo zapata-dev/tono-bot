@@ -1113,6 +1113,9 @@ def process_fsm(
         campaign_type=campaign_type,
     )
 
+    # Store intent in meta so conversation_logic can use it
+    meta["intent"] = intent.value
+
     # Compute slot changes for this turn
     changes = diff_slots(old_slots, slots)
     meta["slot_changes"] = changes

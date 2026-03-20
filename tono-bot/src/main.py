@@ -764,6 +764,7 @@ async def _process_accumulated_messages(bot_state: GlobalState, remote_jid: str)
             media_urls = result.get("media_urls") or []
             lead_info = result.get("lead_info")
             pdf_info = result.get("pdf_info")
+            location_link = result.get("location_link")
 
             # Guardar estado
             try:
@@ -806,6 +807,11 @@ async def _process_accumulated_messages(bot_state: GlobalState, remote_jid: str)
             else:
                 # Enviar respuesta normal (texto + fotos si las hay)
                 await send_evolution_message(bot_state, remote_jid, reply_text, media_urls)
+
+            # Send location link as a follow-up message if available
+            if location_link:
+                logger.info(f"📍 Enviando link de ubicación: {location_link}")
+                await send_evolution_message(bot_state, remote_jid, location_link)
 
             # === FUNNEL TRACKING (V2) ===
             funnel_stage = result.get("funnel_stage", "1er Contacto")

@@ -929,6 +929,48 @@ def _extract_photos_from_item(item: Dict[str, Any]) -> List[str]:
     return [u.strip() for u in raw.split("|") if u.strip().startswith("http")]
 
 
+def _extract_location_link(inventory_service, last_interest: str, city: str = "") -> Optional[str]:
+    """Extract ubicacion_link from inventory for the model of interest.
+    If city is provided, prefer the item matching both model and city.
+    """
+    items = getattr(inventory_service, "items", None) or []
+    if not items or not last_interest:
+        return None
+
+    interest_norm = _normalize_spanish(last_interest)
+    interest_tokens = [t for t in interest_norm.split() if len(t) >= 2
+                       and t not in {"foton", "freightliner", "camion", "camión"}]
+    if not interest_tokens:
+        return None
+
+    city_norm = _normalize_spanish(city) if city else ""
+    best_link = None
+
+    for item in items:
+        modelo = _safe_get(item, ["Modelo", "modelo", "id_modelo"]).strip()
+        if not modelo:
+            continue
+        modelo_norm = _normalize_spanish(modelo)
+        if not any(tok in modelo_norm for tok in interest_tokens):
+            continue
+
+        link = _safe_get(item, ["ubicacion_link"])
+        if not link:
+            continue
+
+        # If city matches, return immediately (best match)
+        if city_norm:
+            item_ubic = _normalize_spanish(_safe_get(item, ["ubicacion", "Ubicacion", "ubicación"]))
+            if city_norm in item_ubic:
+                return link
+
+        # Otherwise store as fallback
+        if not best_link:
+            best_link = link
+
+    return best_link
+
+
 # ============================================================
 # NAME / PAYMENT / APPOINTMENT EXTRACTION
 # ============================================================
@@ -1451,6 +1493,21 @@ def _pick_media_urls(
 
     rep_norm = _normalize_spanish(reply)
 
+    # City from context for filtering items with same model in different locations
+    user_city = _normalize_spanish((context.get("user_city") or "").strip())
+
+    def _prefer_city_item(candidates: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Among matching items, prefer the one whose ubicacion matches user's city."""
+        if not candidates:
+            return None
+        if not user_city:
+            return candidates[0]
+        for c in candidates:
+            ubic = _normalize_spanish(_safe_get(c, ["ubicacion", "Ubicacion", "ubicación"]))
+            if user_city in ubic:
+                return c
+        return candidates[0]  # fallback to first if no city match
+
     # 4) Detectar qué modelo quiere ver
     target_item = None
     target_model_name = ""
@@ -1466,12 +1523,15 @@ def _pick_media_urls(
 
         # Verificar si el mensaje menciona el modelo de interés (word boundary)
         if any(re.search(r'\b' + re.escape(tok) + r'\b', msg) for tok in interest_tokens):
+            matching_items = []
             for item in items:
                 modelo = _safe_get(item, ["Modelo", "modelo", "id_modelo"]).strip()
                 if _normalize_spanish(modelo) == interest_norm or any(tok in _normalize_spanish(modelo) for tok in interest_tokens):
-                    target_item = item
-                    target_model_name = modelo
-                    break
+                    matching_items.append(item)
+            best = _prefer_city_item(matching_items)
+            if best:
+                target_item = best
+                target_model_name = _safe_get(best, ["Modelo", "modelo", "id_modelo"]).strip()
 
     # B) PRIORIDAD 2: Buscar mención explícita en mensaje o respuesta del bot (con scoring)
     if not target_item:
@@ -1509,6 +1569,12 @@ def _pick_media_urls(
                 if pat.search(rep_norm):
                     score += 1  # Match en respuesta del bot = menor prioridad
 
+            # City bonus: prefer items in the user's city (tiebreaker)
+            if score > 0 and user_city:
+                ubic = _normalize_spanish(_safe_get(item, ["ubicacion", "Ubicacion", "ubicación"]))
+                if user_city in ubic:
+                    score += 0.5  # Small bonus to prefer city match without overriding model match
+
             if score > best_score:
                 best_score = score
                 best_item = item
@@ -1522,11 +1588,15 @@ def _pick_media_urls(
     if not target_item and last_interest:
         # Strip year from last_interest for comparison (e.g. "ESTA 6X4 11.8 2023" → "ESTA 6X4 11.8")
         interest_no_year = re.sub(r'\s+20\d{2}$', '', last_interest).strip()
+        matching_items = []
         for item in items:
             modelo = _safe_get(item, ["Modelo", "modelo", "id_modelo"]).strip()
             if _normalize_spanish(modelo) == _normalize_spanish(interest_no_year):
-                target_item = item
-                target_model_name = modelo
+                matching_items.append(item)
+        best = _prefer_city_item(matching_items)
+        if best:
+            target_item = best
+            target_model_name = _safe_get(best, ["Modelo", "modelo", "id_modelo"]).strip()
                 break
 
     if not target_item:
@@ -1534,7 +1604,8 @@ def _pick_media_urls(
 
     # 5) Extraer fotos
     urls = _extract_photos_from_item(target_item)
-    logger.info(f"📸 Fotos seleccionadas: modelo='{target_model_name}', {len(urls)} URLs, last_interest='{last_interest}'")
+    item_ubic = _safe_get(target_item, ["ubicacion", "Ubicacion", "ubicación"])
+    logger.info(f"📸 Fotos seleccionadas: modelo='{target_model_name}', {len(urls)} URLs, last_interest='{last_interest}', ubicacion='{item_ubic}'")
     if not urls:
         return []
 
@@ -1968,6 +2039,15 @@ async def _handle_message_fsm(
             parts.append(f"Plazo: {slots.timeline}")
         campaign_data_payload = {"resumen": " | ".join(parts)}
 
+    # Location link extraction (when user asks for location)
+    location_link = None
+    if meta.get("intent") == "ask_location" and slots.interest:
+        location_link = _extract_location_link(
+            inventory_service, slots.interest, slots.city or ""
+        )
+        if location_link:
+            logger.info(f"📍 Location link found: {location_link}")
+
     # Photo selection (reuse existing logic)
     media_urls: List[str] = []
     if action == Action.SEND_PHOTOS:
@@ -2007,6 +2087,7 @@ async def _handle_message_fsm(
         },
         "pdf_info": pdf_info,
         "campaign_data": campaign_data_payload,
+        "location_link": location_link,
         # V2: slot changes for centralized Monday sync
         "slot_changes": [
             {"slot": c.slot, "old": c.old_value, "new": c.new_value}
