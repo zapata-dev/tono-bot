@@ -212,12 +212,14 @@ REGLAS OBLIGATORIAS:
 - Si no sabes algo: "Eso lo confirmo y te aviso."
 
 6) ANTI-REPETICIÓN (PRIORIDAD MÁXIMA — incluso sobre instrucciones de campaña):
-- NUNCA repitas un mensaje anterior textualmente ni con paráfrasis mínima. Revisa tu ÚLTIMO MENSAJE en el HISTORIAL.
+- NUNCA repitas un mensaje anterior textualmente ni con paráfrasis mínima. Revisa TUS ÚLTIMOS MENSAJES en el contexto.
 - Si ya pediste datos (correo, ciudad, etc.) y el cliente NO los dio sino que PREGUNTÓ algo: PRIMERO responde su pregunta, LUEGO re-pide los datos con diferente redacción.
 - Si el cliente dice "qué?", "cómo?", "no entiendo": EXPLICA con otras palabras qué necesitas y POR QUÉ.
 - NUNCA preguntes algo que ya sabes.
-- REVISA la sección "DATOS YA RECOPILADOS" en el contexto. Si ya tienes email, teléfono o ciudad, NO los vuelvas a pedir. Pide SOLO los datos que faltan.
-- Cuando el cliente te da un dato (correo, teléfono, ciudad), reconócelo y avanza al SIGUIENTE dato faltante. No repitas la misma pregunta.
+- REVISA la sección "DATOS YA RECOPILADOS" en el contexto. Si ya tienes nombre, email, teléfono o ciudad, NO los vuelvas a pedir. Pide SOLO los datos que FALTAN.
+- Cuando el cliente te da un dato (correo, teléfono, ciudad), RECONÓCELO explícitamente y avanza al SIGUIENTE dato faltante. No repitas la misma pregunta.
+- Si el cliente envía VARIOS datos a la vez (ej. nombre, teléfono y correo en un mensaje), reconoce TODOS y solo pide los que aún falten.
+- Si el cliente CONFIRMA algo que le preguntaste ("sí", "eso te digo", "que sí", "actualízala", "hazlo"), EJECUTA la acción. NO repitas la pregunta.
 
 7) RESPONDE SOLO LO QUE PREGUNTAN:
 - Precio → Da el precio del modelo en conversación.
@@ -288,13 +290,14 @@ REGLAS OBLIGATORIAS:
 
 14) LEAD (JSON):
 - SOLO genera JSON si hay: NOMBRE + MODELO + CITA CONFIRMADA.
+- USA los datos REALES del cliente, NUNCA uses datos de ejemplo ni inventados.
 ```json
 {{
   "lead_event": {{
-    "nombre": "Juan Perez",
+    "nombre": "[nombre real del cliente]",
     "interes": "[modelo del inventario]",
-    "cita": "Lunes 10 AM",
-    "pago": "Contado"
+    "cita": "[fecha/hora real de la cita]",
+    "pago": "[Contado o Financiamiento]"
   }}
 }}
 ```
@@ -304,10 +307,13 @@ REGLAS OBLIGATORIAS:
 ```json
 {{
   "campaign_data": {{
-    "resumen": "Email: x@y.com | Ciudad: Nayarit | Propuesta: $821,000 | Plazo: 6 meses"
+    "resumen": "[Dato1]: [valor real] | [Dato2]: [valor real] | ..."
   }}
 }}
 ```
+- Ejemplo de formato: "Propuesta: $700,000 | Nombre: María López | Tel: 3312345678 | Email: maria@empresa.com | Ciudad: Guadalajara | Plazo: 3 meses"
+- IMPORTANTE: USA SOLO datos REALES que el cliente proporcionó. NUNCA inventes datos ni uses ejemplos.
+- Si el cliente NO ha dado un dato requerido, NO generes el JSON. Espera a tenerlos TODOS.
 - Este JSON es INDEPENDIENTE del lead_event (no necesita cita confirmada).
 - Solo genera cuando tengas TODOS los datos solicitados por la campaña.
 - El "resumen" debe listar cada dato con su etiqueta, separados por " | ".
@@ -1779,7 +1785,17 @@ async def handle_message(
         turn_count = 1
 
     # Extract from user input
+    # For multi-line messages (user sends all data at once), try each line individually
+    _msg_lines = [l.strip() for l in user_message.strip().split("\n") if l.strip()]
+    _is_multiline = len(_msg_lines) > 1
+
     extracted_name = _extract_name_from_text(user_message, history)
+    # If multi-line and name not found in full text (digits reject it), try first line
+    if not extracted_name and _is_multiline:
+        for _line in _msg_lines:
+            extracted_name = _extract_name_from_text(_line, history)
+            if extracted_name:
+                break
     if extracted_name:
         saved_name = extracted_name
 
@@ -1806,7 +1822,8 @@ async def handle_message(
     _city_patterns = [
         r'(?:de|en|desde|vivo en|soy de|ciudad)\s+([A-ZÁÉÍÓÚÑa-záéíóúñ]+(?:[,\s]+[A-ZÁÉÍÓÚÑa-záéíóúñ]+){0,3})',
     ]
-    # Direct city reply: if bot asked for city and reply is 1-4 words with no numbers
+    _last_bot = ""
+    # Direct city reply: if bot asked for city and reply is short with no numbers
     if history:
         _last_bot = ""
         for _hl in reversed(history.strip().split("\n")):
@@ -1815,10 +1832,16 @@ async def handle_message(
                 break
         _city_asking = ["ciudad", "de dónde", "de donde", "localidad", "estado", "ubicación"]
         if any(k in _last_bot for k in _city_asking):
-            _words = user_message.strip().split()
-            if 1 <= len(_words) <= 5 and not re.search(r'\d', user_message):
-                saved_city = user_message.strip()
-                logger.info(f"🏙️ Ciudad detectada por contexto: {saved_city}")
+            # For multi-line messages, check each line individually
+            _city_candidates = _msg_lines if _is_multiline else [user_message.strip()]
+            for _city_line in _city_candidates:
+                _words = _city_line.split()
+                if 1 <= len(_words) <= 5 and not re.search(r'\d', _city_line):
+                    # Skip lines that look like email or name (already captured)
+                    if "@" not in _city_line and _city_line != extracted_name:
+                        saved_city = _city_line
+                        logger.info(f"🏙️ Ciudad detectada por contexto: {saved_city}")
+                        break
     # Also check explicit patterns
     if not saved_city:
         for _cp in _city_patterns:
@@ -1828,6 +1851,22 @@ async def handle_message(
                 if len(_candidate_city) > 2 and _candidate_city.lower() not in {"si", "no", "ok"}:
                     saved_city = _candidate_city
                     logger.info(f"🏙️ Ciudad detectada: {saved_city}")
+                    break
+    # Multi-line fallback: try each line as a potential city if bot was asking for data
+    if not saved_city and _is_multiline and history:
+        _data_asking = ["nombre", "teléfono", "correo", "ciudad", "datos", "registro", "completar"]
+        if any(k in _last_bot for k in _data_asking):
+            for _city_line in _msg_lines:
+                _words = _city_line.split()
+                if 1 <= len(_words) <= 4 and not re.search(r'[\d@]', _city_line):
+                    # Skip if it looks like the name we already extracted
+                    if extracted_name and _city_line.lower() == extracted_name.lower():
+                        continue
+                    # Skip common time expressions
+                    if any(k in _city_line.lower() for k in ["mes", "semana", "día", "año"]):
+                        continue
+                    saved_city = _city_line
+                    logger.info(f"🏙️ Ciudad detectada (multi-línea): {saved_city}")
                     break
 
     # Time and date
@@ -2110,18 +2149,24 @@ async def handle_message(
         except Exception as e:
             logger.error(f"⚠️ Error cargando campañas para prompt: {e}")
 
-    # Extraer último mensaje del bot del historial para anti-repetición
-    last_bot_msg = ""
+    # Extraer últimos 2 mensajes del bot del historial para anti-repetición
+    last_bot_msgs = []
     if history:
         for _line in reversed(history.strip().split("\n")):
-            if _line.startswith("A: "):
-                last_bot_msg = _line[3:].strip()
-                break
+            if _line.startswith("A: ") and len(last_bot_msgs) < 2:
+                last_bot_msgs.append(_line[3:].strip())
+    last_bot_msg = last_bot_msgs[0] if last_bot_msgs else ""
 
-    last_bot_section = f"TU ÚLTIMO MENSAJE (NO REPETIR): {last_bot_msg[:200]}\n" if last_bot_msg else ""
+    last_bot_section = ""
+    if last_bot_msgs:
+        last_bot_section = f"TUS ÚLTIMOS MENSAJES (NO REPETIR NI PARAFRASEAR):\n"
+        for i, _bm in enumerate(last_bot_msgs):
+            last_bot_section += f"  [{i+1}]: {_bm[:200]}\n"
 
     # Build collected-data section so GPT knows what it already has
     _collected_items = []
+    if saved_name:
+        _collected_items.append(f"NOMBRE: {saved_name}")
     if saved_email:
         _collected_items.append(f"EMAIL: {saved_email}")
     if saved_phone:
@@ -2131,7 +2176,8 @@ async def handle_message(
     _collected_section = ""
     if _collected_items:
         _collected_section = (
-            "DATOS YA RECOPILADOS (NO volver a pedir): " + " | ".join(_collected_items) + "\n"
+            "*** DATOS YA RECOPILADOS (NO volver a pedir estos datos): "
+            + " | ".join(_collected_items) + " ***\n"
         )
 
     context_block = (
@@ -2210,8 +2256,18 @@ async def handle_message(
                     # Extract campaign_data if present (independent of lead_event)
                     cd = payload.get("campaign_data") if isinstance(payload, dict) else None
                     if isinstance(cd, dict) and cd.get("resumen"):
-                        campaign_data_payload = cd
-                        logger.info(f"📋 Campaign data extraído: {cd['resumen']}")
+                        # Validate: reject if it contains placeholder/example data from prompt
+                        _resumen = cd["resumen"]
+                        _placeholder_markers = [
+                            "x@y.com", "5551234567", "821,000", "Juan Perez",
+                            "juan@correo.com", "Nayarit",
+                        ]
+                        _has_placeholder = any(p.lower() in _resumen.lower() for p in _placeholder_markers)
+                        if _has_placeholder:
+                            logger.warning(f"⚠️ Campaign data RECHAZADO (contiene datos placeholder): {_resumen}")
+                        else:
+                            campaign_data_payload = cd
+                            logger.info(f"📋 Campaign data extraído: {_resumen}")
                 except Exception as e:
                     logger.error(f"Error parseando JSON de lead: {e}")
 
