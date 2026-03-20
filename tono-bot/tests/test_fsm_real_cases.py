@@ -9,16 +9,16 @@ import sys
 import os
 import re
 
-# Add src to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+# Add tono-bot/ (parent of src/) to path so "from src.xxx" works
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from conversation_fsm import (
+from src.conversation_fsm import (
     process_fsm, Action, ConversationState, Slots,
     classify_intent, Intent,
     extract_entities_for_fsm, diff_slots, SlotChange,
     validate_legacy_value,
 )
-from llm_writer import try_deterministic_response
+from src.llm_writer import try_deterministic_response
 
 
 # ============================================================
@@ -432,7 +432,7 @@ def test_slot_to_monday_mapping():
 def test_legacy_guard_end_to_end():
     """Dirty legacy values should not enter FSM slots."""
     # Simulate: FSM extracted nothing, legacy has dirty city
-    from conversation_fsm import validate_legacy_value
+    from src.conversation_fsm import validate_legacy_value
 
     # Build slots_data as handle_message does
     fsm_extracted = {}  # FSM found nothing

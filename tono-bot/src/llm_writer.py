@@ -12,7 +12,7 @@ import hashlib
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from conversation_fsm import Action, Slots
+from src.conversation_fsm import Action, Slots
 
 logger = logging.getLogger(__name__)
 
