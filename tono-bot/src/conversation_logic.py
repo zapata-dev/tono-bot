@@ -10,6 +10,12 @@ import httpx
 import pytz
 from openai import AsyncOpenAI, APITimeoutError, RateLimitError, APIStatusError, APIConnectionError
 
+from conversation_fsm import (
+    process_fsm, Action, ConversationState, Slots,
+    classify_intent, Intent,
+)
+from llm_writer import build_writer_prompt
+
 logger = logging.getLogger(__name__)
 
 # ============================================================
@@ -1785,6 +1791,205 @@ async def _llm_call_with_fallback(messages: list, temperature: float = 0.3, max_
 
 
 # ============================================================
+# FSM-POWERED MESSAGE HANDLER (campaign conversations)
+# ============================================================
+async def _handle_message_fsm(
+    user_message: str,
+    context: Dict[str, Any],
+    history: str,
+    turn_count: int,
+    slots_data: Dict[str, str],
+    new_data: Dict[str, str],
+    campaign,
+    inventory_service,
+) -> Optional[Dict[str, Any]]:
+    """
+    State-machine powered handler for campaign conversations.
+    Returns a result dict compatible with handle_message(), or None to fall back to legacy.
+    """
+    # Ensure slots are populated in context before FSM processes them
+    for key, value in slots_data.items():
+        if value:
+            ctx_key = {
+                "name": "user_name", "phone": "user_phone", "email": "user_email",
+                "city": "user_city", "interest": "last_interest",
+                "appointment": "last_appointment", "payment": "last_payment",
+                "offer_amount": "offer_amount",
+            }.get(key, key)
+            context[ctx_key] = value
+
+    has_campaign = bool(campaign and campaign.instructions)
+
+    # Run FSM
+    action, new_state, slots, meta = process_fsm(
+        user_message=user_message,
+        context=context,
+        new_data=new_data,
+        has_campaign=has_campaign,
+        turn_count=turn_count,
+    )
+
+    # Build last bot messages for anti-repetition
+    last_bot_messages = []
+    for _hl in reversed(history.strip().split("\n")):
+        if _hl.startswith("A: "):
+            last_bot_messages.insert(0, _hl[3:])
+            if len(last_bot_messages) >= 3:
+                break
+
+    # Build inventory text (focused on campaign vehicle)
+    inventory_text = ""
+    if slots.interest:
+        inventory_text = _build_focused_inventory_text(inventory_service, slots.interest) or ""
+    if not inventory_text:
+        inventory_text = _build_inventory_text(inventory_service) or ""
+
+    # Build the focused writer prompt
+    campaign_instructions = campaign.instructions if campaign else ""
+    writer_prompt = build_writer_prompt(
+        action=action,
+        slots=slots,
+        user_message=user_message,
+        history=history,
+        last_bot_messages=last_bot_messages,
+        inventory_text=inventory_text,
+        campaign_instructions=campaign_instructions,
+        meta=meta,
+    )
+
+    # Call LLM with focused prompt
+    messages = [
+        {"role": "system", "content": writer_prompt},
+        {"role": "user", "content": user_message},
+    ]
+
+    try:
+        resp = await _llm_call_with_fallback(messages)
+        reply_clean = (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        logger.error(f"❌ FSM LLM error: {e}")
+        return None  # Fall back to legacy
+
+    # Clean reply (remove JSON artifacts, prefixes)
+    reply_clean = re.sub(r'^(?:Adrian|Asesor|Bot)\s*:\s*', '', reply_clean, flags=re.IGNORECASE).strip()
+    reply_clean = re.sub(r'```json.*?```', '', reply_clean, flags=re.DOTALL).strip()
+
+    # Post-LLM dedup check (Jaccard similarity)
+    _is_dup = False
+    if last_bot_messages and reply_clean:
+        _reply_tokens = set(reply_clean.lower().split())
+        if len(_reply_tokens) >= 3:
+            for _prev in last_bot_messages:
+                _prev_tokens = set(_prev.lower().split())
+                if _prev_tokens and _reply_tokens:
+                    _union = _reply_tokens | _prev_tokens
+                    if _union:
+                        _jaccard = len(_reply_tokens & _prev_tokens) / len(_union)
+                        if _jaccard >= 0.75:
+                            _is_dup = True
+                            break
+    if _is_dup:
+        logger.warning("⚠️ FSM DEDUP: Respuesta duplicada, re-generando...")
+        messages[0]["content"] += (
+            "\n\nALERTA: Tu respuesta anterior fue IDÉNTICA a un mensaje previo. "
+            "Genera algo DIFERENTE. NO repitas."
+        )
+        try:
+            resp2 = await _llm_call_with_fallback(messages)
+            reply_clean = (resp2.choices[0].message.content or "").strip()
+            reply_clean = re.sub(r'^(?:Adrian|Asesor|Bot)\s*:\s*', '', reply_clean, flags=re.IGNORECASE).strip()
+        except Exception:
+            pass  # Keep first attempt
+
+    # Update history
+    new_history = (history + f"\nC: {user_message}\nA: {reply_clean}").strip()
+
+    # Build updated context
+    new_context = dict(context)
+    new_context["history"] = new_history[-4000:]
+    new_context["turn_count"] = turn_count
+    slots.update_context(new_context)
+
+    # Determine funnel stage
+    funnel_stage = "1er Contacto"
+    if slots.interest:
+        funnel_stage = "Intención"
+    if slots.appointment:
+        funnel_stage = "Cita Programada"
+
+    is_disinterest = meta.get("is_disinterest", False)
+    if is_disinterest:
+        funnel_stage = "Sin Interes"
+
+    new_context["funnel_stage"] = funnel_stage
+
+    # Check for lead generation (name + interest + appointment)
+    lead_info = None
+    if slots.name and slots.interest and slots.appointment:
+        lead_info = {
+            "nombre": slots.name,
+            "interes": slots.interest,
+            "cita": slots.appointment,
+            "pago": slots.payment or "",
+        }
+
+    # Campaign data extraction (all campaign slots filled)
+    campaign_data_payload = None
+    if action == Action.CONFIRM_REGISTRATION and slots.name:
+        parts = []
+        if slots.offer_amount:
+            parts.append(f"Propuesta: {slots.offer_amount}")
+        if slots.name:
+            parts.append(f"Nombre: {slots.name}")
+        if slots.phone:
+            parts.append(f"Tel: {slots.phone}")
+        if slots.email:
+            parts.append(f"Email: {slots.email}")
+        if slots.city:
+            parts.append(f"Ciudad: {slots.city}")
+        if slots.timeline:
+            parts.append(f"Plazo: {slots.timeline}")
+        campaign_data_payload = {"resumen": " | ".join(parts)}
+
+    # Photo selection (reuse existing logic)
+    media_urls: List[str] = []
+    if action == Action.SEND_PHOTOS:
+        media_urls = _pick_media_urls(user_message, reply_clean, inventory_service, new_context)
+
+    # PDF detection
+    pdf_info = _detect_pdf_request(user_message, slots.interest or "", new_context)
+    if pdf_info and pdf_info.get("pdf_url"):
+        reply_clean = pdf_info.get("mensaje", reply_clean)
+        if funnel_stage in ("1er Contacto", "Intención"):
+            funnel_stage = "Cotización"
+            new_context["funnel_stage"] = funnel_stage
+
+    logger.info(
+        f"✅ FSM response: state={new_state.value} action={action.value} "
+        f"funnel={funnel_stage}"
+    )
+
+    return {
+        "reply": reply_clean,
+        "new_state": "chatting",
+        "context": new_context,
+        "media_urls": media_urls,
+        "lead_info": lead_info,
+        "funnel_stage": funnel_stage,
+        "is_disinterest": is_disinterest,
+        "funnel_data": {
+            "nombre": slots.name or None,
+            "interes": slots.interest or None,
+            "cita": slots.appointment or None,
+            "pago": slots.payment or None,
+            "turn_count": turn_count,
+        },
+        "pdf_info": pdf_info,
+        "campaign_data": campaign_data_payload,
+    }
+
+
+# ============================================================
 # MAIN ENTRY
 # ============================================================
 async def handle_message(
@@ -1960,6 +2165,37 @@ async def handle_message(
                     logger.info(f"🏙️ Ciudad detectada (multi-línea): {saved_city}")
                     break
 
+    # Extract offer amount for campaigns (e.g., "te doy 670 mil" → "$670,000")
+    extracted_offer = None
+    _offer_pat = re.search(
+        r'(?:(?:te\s+)?(?:doy|ofrezco|propongo|pongo)|propuesta|oferta)\s*(?:de\s+)?\$?\s*(\d[\d,\.]*)\s*(?:mil|k)?'
+        r'|\$?\s*(\d[\d,\.]*)\s*(?:mil|k)\b',
+        user_message, re.IGNORECASE
+    )
+    if _offer_pat:
+        _raw = (_offer_pat.group(1) or _offer_pat.group(2) or "").replace(",", "").replace(".", "")
+        if _raw.isdigit():
+            _val = int(_raw)
+            if _val < 10000:  # "670" → $670,000
+                _val *= 1000
+            extracted_offer = f"${_val:,}"
+            logger.info(f"💰 Oferta detectada: {extracted_offer}")
+
+    # Build dict of freshly extracted data for FSM
+    _new_extracted_data: Dict[str, str] = {}
+    if extracted_name:
+        _new_extracted_data["name"] = extracted_name
+    if _email_match:
+        _new_extracted_data["email"] = saved_email
+    if saved_city and saved_city != (context.get("user_city") or ""):
+        _new_extracted_data["city"] = saved_city
+    if extracted_offer:
+        _new_extracted_data["offer_amount"] = extracted_offer
+    if extracted_payment:
+        _new_extracted_data["payment"] = extracted_payment
+    if extracted_appt:
+        _new_extracted_data["appointment"] = extracted_appt
+
     # Time and date
     now_dt, current_time_str = get_mexico_time()
     # Formatear fecha en español manualmente (el servidor tiene locale inglés)
@@ -2052,6 +2288,36 @@ async def handle_message(
                         )
         except Exception as e:
             logger.error(f"⚠️ Error en keyword campaign matching: {e}")
+
+    # ============================================================
+    # FSM PATH: Campaign conversations use state machine
+    # ============================================================
+    _use_fsm = _has_campaign_instructions and not _is_organic_campaign_match and tracking_id
+    if _use_fsm:
+        try:
+            fsm_result = await _handle_message_fsm(
+                user_message=user_message,
+                context=context,
+                history=history,
+                turn_count=turn_count,
+                slots_data={
+                    "name": saved_name,
+                    "phone": saved_phone,
+                    "email": saved_email,
+                    "city": saved_city,
+                    "interest": last_interest,
+                    "appointment": last_appointment,
+                    "payment": last_payment,
+                    "offer_amount": extracted_offer,
+                },
+                new_data=_new_extracted_data,
+                campaign=_matched_campaign,
+                inventory_service=inventory_service,
+            )
+            if fsm_result:
+                return fsm_result
+        except Exception as e:
+            logger.error(f"⚠️ FSM falló, cayendo a lógica legacy: {e}")
 
     if (_has_campaign_instructions or _is_special_campaign_no_instructions) and not _is_organic_campaign_match:
         # Campaign has specific instructions OR it's a special campaign type (SU/LQ/PR/EV)
