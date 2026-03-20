@@ -1833,6 +1833,11 @@ async def handle_message(
         if tracking_vehicle:
             last_interest = tracking_vehicle
 
+    try:
+        turn_count = int(context.get("turn_count", 0)) + 1
+    except (ValueError, TypeError):
+        turn_count = 1
+
     # Model-switch detection: if client has a campaign/tracking but asks for a different model,
     # respect their wish and deactivate the campaign context for this conversation
     tracking_id = (context.get("tracking_id") or "").strip()
@@ -1846,11 +1851,6 @@ async def handle_message(
             context.pop("tracking_data", None)
             context.pop("organic_campaign_tid", None)
             context["last_interest"] = _switch_target
-
-    try:
-        turn_count = int(context.get("turn_count", 0)) + 1
-    except (ValueError, TypeError):
-        turn_count = 1
 
     # Extract from user input
     # For multi-line messages (user sends all data at once), try each line individually
