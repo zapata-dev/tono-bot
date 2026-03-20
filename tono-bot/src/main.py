@@ -906,6 +906,95 @@ async def _process_accumulated_messages(bot_state: GlobalState, remote_jid: str)
                 except Exception as e:
                     logger.error(f"❌ Error actualizando funnel en Monday: {e}")
 
+            # === SLOT-BASED INCREMENTAL MONDAY SYNC ===
+            # When FSM reports slot changes, sync each changed slot to Monday
+            # independently. This ensures granular CRM updates even if the
+            # conversation doesn't trigger a full stage change.
+            slot_changes = result.get("slot_changes") or []
+            if slot_changes and monday_service:
+                try:
+                    phone = remote_jid.split("@")[0]
+                    sanitized = monday_service._sanitize_phone(phone)
+                    existing_item = await monday_service._find_item_by_phone(sanitized)
+                    if existing_item:
+                        item_id = int(existing_item["id"])
+                        result_ctx = result.get("context", context) or {}
+
+                        # Map slot changes to Monday column updates
+                        col_vals = {}
+                        slot_notes = []
+                        for change in slot_changes:
+                            slot_name = change.get("slot", "")
+                            new_val = change.get("new", "")
+                            if not new_val:
+                                continue
+
+                            if slot_name == "interest" and monday_service.vehicle_col_id:
+                                from src.monday_service import resolve_vehicle_to_dropdown
+                                vehicle_label = resolve_vehicle_to_dropdown(new_val)
+                                if vehicle_label:
+                                    col_vals[monday_service.vehicle_col_id] = {"labels": [vehicle_label]}
+                                    slot_notes.append(f"Vehículo: {vehicle_label}")
+
+                            elif slot_name == "payment" and monday_service.payment_col_id:
+                                from src.monday_service import resolve_payment_to_label
+                                payment_label = resolve_payment_to_label(new_val)
+                                if payment_label != "Por definir":
+                                    col_vals[monday_service.payment_col_id] = {"label": payment_label}
+                                    slot_notes.append(f"Pago: {payment_label}")
+
+                            elif slot_name == "appointment" and monday_service.appointment_col_id:
+                                from src.monday_service import resolve_appointment_to_iso
+                                appt_iso = resolve_appointment_to_iso(new_val)
+                                if appt_iso and appt_iso.get("date"):
+                                    col_vals[monday_service.appointment_col_id] = {"date": appt_iso["date"]}
+                                    if monday_service.appointment_time_col_id and appt_iso.get("time"):
+                                        try:
+                                            tp = appt_iso["time"].split(":")
+                                            col_vals[monday_service.appointment_time_col_id] = {
+                                                "hour": int(tp[0]),
+                                                "minute": int(tp[1]) if len(tp) > 1 else 0,
+                                            }
+                                        except (ValueError, IndexError):
+                                            pass
+                                    slot_notes.append(f"Cita: {new_val}")
+
+                            elif slot_name == "email":
+                                slot_notes.append(f"Email: {new_val}")
+
+                            elif slot_name == "city":
+                                slot_notes.append(f"Ciudad: {new_val}")
+
+                            elif slot_name == "offer_amount":
+                                slot_notes.append(f"Propuesta: {new_val}")
+
+                            elif slot_name == "name":
+                                # Update item name
+                                try:
+                                    mutation = 'mutation ($id: ID!, $name: String!) { change_simple_column_value(item_id: $id, board_id: %s, column_id: "name", value: $name) { id } }' % monday_service.board_id
+                                    await monday_service._graphql(mutation, {"id": str(item_id), "name": new_val})
+                                except Exception:
+                                    pass
+                                slot_notes.append(f"Nombre: {new_val}")
+
+                        # Apply column updates if any
+                        if col_vals:
+                            import json as _json
+                            mutation = 'mutation ($id: ID!, $vals: JSON!) { change_multiple_column_values(item_id: $id, board_id: %s, column_values: $vals) { id } }' % monday_service.board_id
+                            await monday_service._graphql(mutation, {
+                                "id": str(item_id),
+                                "vals": _json.dumps(col_vals),
+                            })
+                            logger.info(f"📊 Slot sync to Monday: {', '.join(slot_notes)} (item {item_id})")
+
+                        # Add a note with slot updates
+                        if slot_notes and len(slot_notes) > 0:
+                            note_text = "📊 Datos actualizados:\n" + "\n".join(f"• {s}" for s in slot_notes)
+                            await monday_service.add_note_to_item(item_id, note_text)
+
+                except Exception as e:
+                    logger.error(f"⚠️ Error en slot sync a Monday: {e}")
+
             # === CAMPAIGN DATA: Guardar datos de campaña como nota en Monday ===
             campaign_data = result.get("campaign_data")
             if campaign_data and isinstance(campaign_data, dict) and campaign_data.get("resumen"):

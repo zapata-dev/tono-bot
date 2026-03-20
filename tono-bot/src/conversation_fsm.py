@@ -1021,3 +1021,70 @@ def process_fsm(
     slots.update_context(context)
 
     return action, new_state, slots, meta
+
+
+# ============================================================
+# LEGACY VALUE VALIDATION — guard against dirty fallback data
+# ============================================================
+
+def validate_legacy_value(slot: str, value: Optional[str]) -> Optional[str]:
+    """
+    Validate a legacy-extracted value before it enters the FSM.
+    Returns the value if valid, None if it smells like noise.
+
+    This prevents dirty data from the legacy extraction pipeline
+    from contaminating FSM slots.
+    """
+    if not value or not value.strip():
+        return None
+
+    v = value.strip()
+
+    if slot == "city":
+        # Reject cities that contain vehicle/ad noise
+        words = {w.rstrip("?!.,;:").lower() for w in v.split()}
+        if words & _CITY_NOISE:
+            logger.info(f"🛡️ Legacy city rejected (noise): {v}")
+            return None
+        # Reject if too short or looks like a common word
+        if len(v) <= 2 or v.lower() in {"si", "no", "ok", "ya", "va"}:
+            return None
+        # Reject if contains digits
+        if re.search(r'\d', v):
+            logger.info(f"🛡️ Legacy city rejected (digits): {v}")
+            return None
+
+    elif slot == "phone":
+        # Must be 10-15 digits
+        digits = re.sub(r'\D', '', v)
+        if not (10 <= len(digits) <= 15):
+            return None
+        return digits
+
+    elif slot == "appointment":
+        # Must contain a day word or time pattern
+        v_lower = v.lower()
+        day_words = {"lunes", "martes", "miércoles", "miercoles", "jueves", "viernes",
+                     "sábado", "sabado", "domingo", "mañana", "hoy"}
+        time_pattern = re.search(r'\d{1,2}[:hH]\d{0,2}|\d{1,2}\s*(am|pm)|medio\s*d[ií]a|tarde|mañana|noche', v_lower)
+        has_day = any(d in v_lower for d in day_words)
+        if not has_day and not time_pattern:
+            logger.info(f"🛡️ Legacy appointment rejected (no day/time): {v}")
+            return None
+
+    elif slot == "payment":
+        # Must be one of the known labels
+        v_lower = v.lower()
+        valid = {"contado", "crédito", "credito", "financiamiento", "cash"}
+        if not any(k in v_lower for k in valid):
+            return None
+
+    elif slot == "name":
+        # Reject names that are just vehicle/business words
+        words = v.lower().split()
+        if any(w in _CITY_NOISE for w in words):
+            return None
+        if any(w in _NAME_BAD_WORDS for w in words) and len(words) <= 1:
+            return None
+
+    return v

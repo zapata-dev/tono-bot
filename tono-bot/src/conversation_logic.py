@@ -14,6 +14,7 @@ from conversation_fsm import (
     process_fsm, Action, ConversationState, Slots,
     classify_intent, Intent,
     extract_entities_for_fsm, diff_slots, SlotChange,
+    validate_legacy_value,
 )
 from llm_writer import build_writer_prompt, try_deterministic_response
 
@@ -2320,16 +2321,16 @@ async def handle_message(
             # Use FSM's own encapsulated extraction instead of legacy
             _fsm_extracted = extract_entities_for_fsm(user_message, history, context)
 
-            # Merge with data already in context (legacy extraction as fallback for fields
-            # that FSM extraction didn't find — ensures backward compatibility)
+            # Merge with data already in context — legacy values pass through
+            # validation guard to prevent dirty data from entering FSM slots
             _fsm_slots_data = {
-                "name": _fsm_extracted.get("name") or saved_name,
-                "phone": _fsm_extracted.get("phone") or saved_phone,
+                "name": _fsm_extracted.get("name") or validate_legacy_value("name", saved_name),
+                "phone": _fsm_extracted.get("phone") or validate_legacy_value("phone", saved_phone),
                 "email": _fsm_extracted.get("email") or saved_email,
-                "city": _fsm_extracted.get("city") or saved_city,
+                "city": _fsm_extracted.get("city") or validate_legacy_value("city", saved_city),
                 "interest": last_interest,
-                "appointment": _fsm_extracted.get("appointment") or last_appointment,
-                "payment": _fsm_extracted.get("payment") or last_payment,
+                "appointment": _fsm_extracted.get("appointment") or validate_legacy_value("appointment", last_appointment),
+                "payment": _fsm_extracted.get("payment") or validate_legacy_value("payment", last_payment),
                 "offer_amount": _fsm_extracted.get("offer_amount") or extracted_offer,
             }
 
