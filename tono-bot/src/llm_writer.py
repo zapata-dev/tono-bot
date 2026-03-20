@@ -3,10 +3,14 @@ LLM Writer — Focused text generation for specific actions.
 
 The LLM does NOT decide what to do. It only writes text for a
 predetermined action. This keeps responses consistent and predictable.
+
+V2: Adds deterministic templates for repetitive actions (ASK_NAME, ASK_EMAIL,
+    ASK_CITY, ASK_TIMELINE, WAIT_MODE, ESCALATE) — these skip the LLM entirely.
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+import random
+from typing import Any, Dict, List, Optional, Tuple
 
 from conversation_fsm import Action, Slots
 
@@ -218,3 +222,99 @@ def build_writer_prompt(
     parts.append(f"MENSAJE DEL CLIENTE: {user_message}")
 
     return "\n".join(parts)
+
+
+# ============================================================
+# DETERMINISTIC TEMPLATES — skip LLM for repetitive actions
+# ============================================================
+
+# Each action maps to a list of template variants for rotation.
+# When the acknowledged data or slot summary is needed, use {ack} and {slot_label} placeholders.
+_DETERMINISTIC_TEMPLATES: Dict[Action, List[str]] = {
+    Action.ASK_NAME: [
+        "¿Me compartes tu nombre completo, por favor?",
+        "¿Con quién tengo el gusto?",
+        "Para registrarte, ¿me das tu nombre completo?",
+    ],
+    Action.ASK_EMAIL: [
+        "¿Me compartes tu correo electrónico?",
+        "¿A qué correo te puedo enviar la información?",
+        "Para enviarte los detalles, ¿cuál es tu correo?",
+    ],
+    Action.ASK_CITY: [
+        "¿De qué ciudad nos visitas?",
+        "¿De dónde eres?",
+        "¿En qué ciudad te encuentras?",
+    ],
+    Action.ASK_TIMELINE: [
+        "¿Cuál sería tu tiempo estimado para liquidar?",
+        "¿En cuánto tiempo planeas cerrar la compra?",
+        "¿Tienes un plazo estimado para la adquisición?",
+    ],
+    Action.WAIT_MODE: [
+        "Sin problema, aquí quedo pendiente.",
+        "Perfecto, cuando gustes aquí estamos.",
+        "Claro, sin problema. Aquí quedo al pendiente.",
+    ],
+    Action.ESCALATE: [
+        "Un asesor se pone en contacto contigo para darte más detalles.",
+        "Te comunico con un asesor especializado que te puede ayudar mejor.",
+    ],
+    Action.SEND_PHOTOS: [
+        "Claro, aquí tienes.",
+        "Con gusto, aquí te las envío.",
+    ],
+}
+
+# Templates with acknowledged data: "{ack}" is replaced with what was given
+_ACK_TEMPLATES: List[str] = [
+    "Perfecto, anotado. ¿Me compartes tu {slot_label}?",
+    "Listo, registrado. ¿Cuál es tu {slot_label}?",
+    "Muy bien. ¿Me das tu {slot_label}, por favor?",
+]
+
+
+def try_deterministic_response(
+    action: Action,
+    slots: Slots,
+    meta: Optional[Dict[str, Any]] = None,
+    last_bot_messages: Optional[List[str]] = None,
+) -> Optional[str]:
+    """
+    Try to generate a deterministic response (no LLM needed).
+    Returns the response text, or None if the action needs LLM.
+
+    Uses template rotation and avoids repeating the last bot message.
+    """
+    meta = meta or {}
+    last_msgs = [m.lower() for m in (last_bot_messages or [])]
+
+    # ACKNOWLEDGE_AND_ASK_NEXT: deterministic with acknowledged data
+    if action == Action.ACKNOWLEDGE_AND_ASK_NEXT:
+        next_slot = meta.get("next_slot", "")
+        slot_label = _SLOT_LABELS.get(next_slot, next_slot)
+        candidates = [t.replace("{slot_label}", slot_label) for t in _ACK_TEMPLATES]
+        return _pick_non_repeat(candidates, last_msgs)
+
+    # CONFIRM_REGISTRATION: deterministic
+    if action == Action.CONFIRM_REGISTRATION:
+        return "Perfecto, ya tengo tus datos registrados. Un asesor se pone en contacto contigo en breve."
+
+    # Simple deterministic actions
+    templates = _DETERMINISTIC_TEMPLATES.get(action)
+    if templates:
+        return _pick_non_repeat(templates, last_msgs)
+
+    return None
+
+
+def _pick_non_repeat(candidates: List[str], last_msgs: List[str]) -> str:
+    """Pick a template that doesn't repeat the last bot message."""
+    # Shuffle to avoid always picking the same one
+    shuffled = list(candidates)
+    random.shuffle(shuffled)
+    for candidate in shuffled:
+        if candidate.lower() not in last_msgs:
+            return candidate
+    # All repeated — return first anyway
+    return candidates[0]

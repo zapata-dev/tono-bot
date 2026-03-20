@@ -13,8 +13,9 @@ from openai import AsyncOpenAI, APITimeoutError, RateLimitError, APIStatusError,
 from conversation_fsm import (
     process_fsm, Action, ConversationState, Slots,
     classify_intent, Intent,
+    extract_entities_for_fsm, diff_slots, SlotChange,
 )
-from llm_writer import build_writer_prompt
+from llm_writer import build_writer_prompt, try_deterministic_response
 
 logger = logging.getLogger(__name__)
 
@@ -1857,49 +1858,61 @@ async def _handle_message_fsm(
         meta=meta,
     )
 
-    # Call LLM with focused prompt
-    messages = [
-        {"role": "system", "content": writer_prompt},
-        {"role": "user", "content": user_message},
-    ]
+    # --- TRY DETERMINISTIC TEMPLATE FIRST (skip LLM for simple actions) ---
+    reply_clean = try_deterministic_response(
+        action=action,
+        slots=slots,
+        meta=meta,
+        last_bot_messages=last_bot_messages,
+    )
+    used_deterministic = reply_clean is not None
 
-    try:
-        resp = await _llm_call_with_fallback(messages)
-        reply_clean = (resp.choices[0].message.content or "").strip()
-    except Exception as e:
-        logger.error(f"❌ FSM LLM error: {e}")
-        return None  # Fall back to legacy
+    if reply_clean:
+        logger.info(f"⚡ Deterministic response for {action.value}: {reply_clean[:60]}")
+    else:
+        # Call LLM with focused prompt
+        messages = [
+            {"role": "system", "content": writer_prompt},
+            {"role": "user", "content": user_message},
+        ]
 
-    # Clean reply (remove JSON artifacts, prefixes)
-    reply_clean = re.sub(r'^(?:Adrian|Asesor|Bot)\s*:\s*', '', reply_clean, flags=re.IGNORECASE).strip()
-    reply_clean = re.sub(r'```json.*?```', '', reply_clean, flags=re.DOTALL).strip()
-
-    # Post-LLM dedup check (Jaccard similarity)
-    _is_dup = False
-    if last_bot_messages and reply_clean:
-        _reply_tokens = set(reply_clean.lower().split())
-        if len(_reply_tokens) >= 3:
-            for _prev in last_bot_messages:
-                _prev_tokens = set(_prev.lower().split())
-                if _prev_tokens and _reply_tokens:
-                    _union = _reply_tokens | _prev_tokens
-                    if _union:
-                        _jaccard = len(_reply_tokens & _prev_tokens) / len(_union)
-                        if _jaccard >= 0.75:
-                            _is_dup = True
-                            break
-    if _is_dup:
-        logger.warning("⚠️ FSM DEDUP: Respuesta duplicada, re-generando...")
-        messages[0]["content"] += (
-            "\n\nALERTA: Tu respuesta anterior fue IDÉNTICA a un mensaje previo. "
-            "Genera algo DIFERENTE. NO repitas."
-        )
         try:
-            resp2 = await _llm_call_with_fallback(messages)
-            reply_clean = (resp2.choices[0].message.content or "").strip()
-            reply_clean = re.sub(r'^(?:Adrian|Asesor|Bot)\s*:\s*', '', reply_clean, flags=re.IGNORECASE).strip()
-        except Exception:
-            pass  # Keep first attempt
+            resp = await _llm_call_with_fallback(messages)
+            reply_clean = (resp.choices[0].message.content or "").strip()
+        except Exception as e:
+            logger.error(f"❌ FSM LLM error: {e}")
+            return None  # Fall back to legacy
+
+        # Clean reply (remove JSON artifacts, prefixes)
+        reply_clean = re.sub(r'^(?:Adrian|Asesor|Bot)\s*:\s*', '', reply_clean, flags=re.IGNORECASE).strip()
+        reply_clean = re.sub(r'```json.*?```', '', reply_clean, flags=re.DOTALL).strip()
+
+        # Post-LLM dedup check (Jaccard similarity)
+        _is_dup = False
+        if last_bot_messages and reply_clean:
+            _reply_tokens = set(reply_clean.lower().split())
+            if len(_reply_tokens) >= 3:
+                for _prev in last_bot_messages:
+                    _prev_tokens = set(_prev.lower().split())
+                    if _prev_tokens and _reply_tokens:
+                        _union = _reply_tokens | _prev_tokens
+                        if _union:
+                            _jaccard = len(_reply_tokens & _prev_tokens) / len(_union)
+                            if _jaccard >= 0.75:
+                                _is_dup = True
+                                break
+        if _is_dup:
+            logger.warning("⚠️ FSM DEDUP: Respuesta duplicada, re-generando...")
+            messages[0]["content"] += (
+                "\n\nALERTA: Tu respuesta anterior fue IDÉNTICA a un mensaje previo. "
+                "Genera algo DIFERENTE. NO repitas."
+            )
+            try:
+                resp2 = await _llm_call_with_fallback(messages)
+                reply_clean = (resp2.choices[0].message.content or "").strip()
+                reply_clean = re.sub(r'^(?:Adrian|Asesor|Bot)\s*:\s*', '', reply_clean, flags=re.IGNORECASE).strip()
+            except Exception:
+                pass  # Keep first attempt
 
     # Update history
     new_history = (history + f"\nC: {user_message}\nA: {reply_clean}").strip()
@@ -1964,9 +1977,13 @@ async def _handle_message_fsm(
             funnel_stage = "Cotización"
             new_context["funnel_stage"] = funnel_stage
 
+    # Extract slot changes from FSM metadata for Monday sync
+    slot_changes = meta.get("slot_changes", [])
+
     logger.info(
         f"✅ FSM response: state={new_state.value} action={action.value} "
-        f"funnel={funnel_stage}"
+        f"funnel={funnel_stage} flow={meta.get('primary_flow', '?')} "
+        f"deterministic={used_deterministic} slot_changes={len(slot_changes)}"
     )
 
     return {
@@ -1986,6 +2003,11 @@ async def _handle_message_fsm(
         },
         "pdf_info": pdf_info,
         "campaign_data": campaign_data_payload,
+        # V2: slot changes for centralized Monday sync
+        "slot_changes": [
+            {"slot": c.slot, "old": c.old_value, "new": c.new_value}
+            for c in slot_changes
+        ],
     }
 
 
@@ -2295,22 +2317,29 @@ async def handle_message(
     _use_fsm = _has_campaign_instructions and not _is_organic_campaign_match and tracking_id
     if _use_fsm:
         try:
+            # Use FSM's own encapsulated extraction instead of legacy
+            _fsm_extracted = extract_entities_for_fsm(user_message, history, context)
+
+            # Merge with data already in context (legacy extraction as fallback for fields
+            # that FSM extraction didn't find — ensures backward compatibility)
+            _fsm_slots_data = {
+                "name": _fsm_extracted.get("name") or saved_name,
+                "phone": _fsm_extracted.get("phone") or saved_phone,
+                "email": _fsm_extracted.get("email") or saved_email,
+                "city": _fsm_extracted.get("city") or saved_city,
+                "interest": last_interest,
+                "appointment": _fsm_extracted.get("appointment") or last_appointment,
+                "payment": _fsm_extracted.get("payment") or last_payment,
+                "offer_amount": _fsm_extracted.get("offer_amount") or extracted_offer,
+            }
+
             fsm_result = await _handle_message_fsm(
                 user_message=user_message,
                 context=context,
                 history=history,
                 turn_count=turn_count,
-                slots_data={
-                    "name": saved_name,
-                    "phone": saved_phone,
-                    "email": saved_email,
-                    "city": saved_city,
-                    "interest": last_interest,
-                    "appointment": last_appointment,
-                    "payment": last_payment,
-                    "offer_amount": extracted_offer,
-                },
-                new_data=_new_extracted_data,
+                slots_data=_fsm_slots_data,
+                new_data=_fsm_extracted,  # Only freshly extracted data
                 campaign=_matched_campaign,
                 inventory_service=inventory_service,
             )

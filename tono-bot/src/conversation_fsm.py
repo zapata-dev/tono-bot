@@ -3,6 +3,9 @@ Conversation FSM — State machine + slot manager + action planner.
 
 Separates decision logic from LLM text generation.
 The LLM only writes; rules decide.
+
+V2: Adds encapsulated entity extraction, slot diffing, primary/secondary flow,
+    and context-aware intent classification.
 """
 
 import logging
@@ -181,6 +184,398 @@ class Slots:
 
 
 # ============================================================
+# SLOT DIFFING — detect real changes per turn
+# ============================================================
+@dataclass
+class SlotChange:
+    """Represents a single slot that changed value."""
+    slot: str
+    old_value: Optional[str]
+    new_value: str
+
+
+def diff_slots(old: Slots, new: Slots) -> List[SlotChange]:
+    """Compare two Slots snapshots and return list of changes."""
+    changes: List[SlotChange] = []
+    for field_name in ("name", "phone", "email", "city", "interest",
+                       "appointment", "payment", "offer_amount", "timeline"):
+        old_val = getattr(old, field_name, None)
+        new_val = getattr(new, field_name, None)
+        if new_val and new_val != old_val:
+            changes.append(SlotChange(slot=field_name, old_value=old_val, new_value=new_val))
+    return changes
+
+
+# ============================================================
+# ENTITY EXTRACTION — encapsulated, replaces legacy extraction
+# ============================================================
+
+# Words that are vehicle/ad terms, NOT cities
+_CITY_NOISE = {
+    "foton", "tunland", "toano", "miler", "cascadia", "esta", "panel",
+    "pickup", "camioneta", "camion", "tracto", "van", "g7", "g9", "e5",
+    "anuncio", "anuncion", "foto", "fotos", "modelo", "unidad",
+    "freightliner", "tractocamion", "volteo", "truck", "trailer",
+    "camiones", "tractos", "camionetas", "tractocamiones",
+    "te", "doy", "bien", "tienes", "mas", "quiero", "este", "ese",
+    "mil", "pesos", "si", "no", "precio", "oferta", "propuesta",
+    "hola", "buenas", "buenos", "ok", "gracias", "perfecto",
+}
+
+_CITY_PATTERNS = [
+    r'\b(?:de|en|desde|vivo en|soy de|ciudad)\s+([A-ZÁÉÍÓÚÑa-záéíóúñ]+(?:[,\s]+[A-ZÁÉÍÓÚÑa-záéíóúñ]+){0,3})',
+]
+
+_NAME_BAD_WORDS = {
+    "aqui", "aquí", "nadie", "yo", "el", "ella", "amigo", "desconocido",
+    "cliente", "usuario", "quien", "quién",
+    "si", "sí", "no", "bueno", "ok", "okey", "hola", "bien", "gracias",
+    "vale", "perfecto", "listo", "claro", "sale", "dale",
+    "que", "qué", "como", "cómo", "cuando", "cuándo", "donde", "dónde",
+    "precio", "fotos", "foto", "info", "información", "informacion",
+    "ubicación", "ubicacion", "costo", "interesado", "interesada",
+    "cotización", "cotizacion", "modelo", "camioneta", "camion", "camión",
+    "credito", "crédito", "contado", "financiamiento",
+    "quiero", "necesito", "busco", "tengo", "puedo", "estoy",
+}
+
+_NAME_TRAILING_STOP = {
+    "disculpa", "disculpe", "disculpen", "perdón", "perdon", "perdona",
+    "oye", "oiga", "mira", "mire",
+    "quisiera", "quería", "queria", "necesito", "quiero",
+    "me", "te", "se", "le", "nos",
+    "en", "de", "del", "por", "para", "con",
+    "una", "un", "la", "el", "lo", "las", "los",
+    "favor", "pregunta", "consulta", "duda",
+    "buenos", "buenas", "buen",
+}
+
+
+def extract_entities_for_fsm(
+    user_message: str,
+    history: str,
+    context: Dict[str, Any],
+) -> Dict[str, str]:
+    """
+    Encapsulated entity extraction for FSM.
+    Returns dict of freshly extracted data: {slot_name: value}.
+
+    This replaces the scattered extraction in handle_message() for FSM paths.
+    All noise filtering happens HERE — the FSM receives clean data.
+    """
+    extracted: Dict[str, str] = {}
+
+    if not user_message:
+        return extracted
+
+    msg_lines = [l.strip() for l in user_message.strip().split("\n") if l.strip()]
+    is_multiline = len(msg_lines) > 1
+
+    # --- NAME ---
+    name = _extract_name(user_message, history)
+    if not name and is_multiline:
+        for line in msg_lines:
+            name = _extract_name(line, history)
+            if name:
+                break
+    if name:
+        extracted["name"] = name
+
+    # --- EMAIL ---
+    email_match = re.search(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', user_message)
+    if email_match:
+        extracted["email"] = email_match.group(0)
+
+    # --- PHONE ---
+    phone_match = re.search(r'\b\d{10,15}\b', user_message)
+    if phone_match:
+        extracted["phone"] = phone_match.group(0)
+
+    # --- CITY (with noise filter) ---
+    city = _extract_city(user_message, history, msg_lines, is_multiline, name)
+    if city:
+        old_city = (context.get("user_city") or "").strip()
+        if city != old_city:
+            extracted["city"] = city
+
+    # --- PAYMENT ---
+    payment = _extract_payment(user_message)
+    if payment:
+        extracted["payment"] = payment
+
+    # --- APPOINTMENT ---
+    appointment = _extract_appointment(user_message)
+    if appointment:
+        extracted["appointment"] = appointment
+
+    # --- OFFER AMOUNT ---
+    offer = _extract_offer(user_message)
+    if offer:
+        extracted["offer_amount"] = offer
+
+    # --- TIMELINE (for campaigns: "en 3 meses", "inmediato", etc.) ---
+    timeline = _extract_timeline(user_message, history)
+    if timeline:
+        extracted["timeline"] = timeline
+
+    return extracted
+
+
+def _extract_name(text: str, history: str) -> Optional[str]:
+    """Extract probable customer name (conservative, with context awareness)."""
+    t = (text or "").strip()
+    if not t or re.search(r'[0-9?¿!¡]', t):
+        return None
+
+    # Explicit patterns
+    patterns = [
+        r"\bme llamo\s+([A-Za-zÁÉÍÓÚÑÜáéíóúñü]+(?:\s+[A-Za-zÁÉÍÓÚÑÜáéíóúñü]+){0,3})\b",
+        r"\bsoy\s+([A-Za-zÁÉÍÓÚÑÜáéíóúñü]+(?:\s+[A-Za-zÁÉÍÓÚÑÜáéíóúñü]+){0,3})\b",
+        r"\bmi nombre es\s+([A-Za-zÁÉÍÓÚÑÜáéíóúñü]+(?:\s+[A-Za-zÁÉÍÓÚÑÜáéíóúñü]+){0,3})\b",
+        r"\bcon\s+([A-Za-zÁÉÍÓÚÑÜáéíóúñü]+(?:\s+[A-Za-zÁÉÍÓÚÑÜáéíóúñü]+){0,2})\b",
+    ]
+    for p in patterns:
+        m = re.search(p, t, flags=re.IGNORECASE)
+        if m:
+            name_raw = m.group(1).strip()
+            words = name_raw.split()
+            while words and words[-1].lower() in _NAME_TRAILING_STOP:
+                words.pop()
+            if not words:
+                return None
+            name_clean = " ".join(words)
+            if name_clean.lower() in _NAME_BAD_WORDS:
+                return None
+            return " ".join(w.capitalize() for w in name_clean.split())
+
+    # Context-aware: bot just asked for name → accept plain 1-4 word reply
+    if history:
+        last_bot = ""
+        for line in reversed(history.split("\n")):
+            if line.strip().startswith("A:"):
+                last_bot = line.lower()
+                break
+        name_asking = [
+            "tu nombre", "cómo te llamas", "como te llamas",
+            "me compartes tu nombre", "me das tu nombre",
+            "a nombre de quién", "a nombre de quien",
+            "quién me busca", "quien me busca",
+            "nombre del interesado", "nombre completo",
+            "con quién tengo el gusto", "con quien tengo el gusto",
+        ]
+        if any(k in last_bot for k in name_asking):
+            words = t.split()
+            if 1 <= len(words) <= 4:
+                if all(re.match(r'^[A-Za-zÁÉÍÓÚÑÜáéíóúñü.]+$', w) for w in words):
+                    if words[0].lower() not in _NAME_BAD_WORDS:
+                        return " ".join(w.capitalize() for w in words)
+
+    return None
+
+
+def _extract_city(
+    user_message: str,
+    history: str,
+    msg_lines: List[str],
+    is_multiline: bool,
+    extracted_name: Optional[str],
+) -> Optional[str]:
+    """Extract city with aggressive noise filtering."""
+    last_bot = ""
+    if history:
+        for hl in reversed(history.strip().split("\n")):
+            if hl.startswith("A: "):
+                last_bot = hl.lower()
+                break
+
+    # Direct city reply: bot asked for city
+    city_asking = ["ciudad", "de dónde", "de donde", "localidad", "estado", "ubicación"]
+    if any(k in last_bot for k in city_asking):
+        candidates = msg_lines if is_multiline else [user_message.strip()]
+        for city_line in candidates:
+            words = city_line.split()
+            if 1 <= len(words) <= 5 and not re.search(r'\d', city_line) and "?" not in city_line:
+                if "@" not in city_line and city_line != extracted_name:
+                    word_set = {w.rstrip("?!.,;:").lower() for w in city_line.split()}
+                    if word_set & _CITY_NOISE:
+                        continue
+                    return city_line
+
+    # Explicit pattern matching
+    for cp in _CITY_PATTERNS:
+        cm = re.search(cp, user_message, re.IGNORECASE)
+        if cm:
+            candidate = cm.group(1).strip()
+            if len(candidate) > 2 and candidate.lower() not in {"si", "no", "ok"}:
+                word_set = {w.rstrip("?!.,;:").lower() for w in candidate.split()}
+                if word_set & _CITY_NOISE:
+                    logger.info(f"🏙️ Ciudad descartada (ruido): {candidate}")
+                    continue
+                return candidate
+
+    # Multi-line fallback
+    if is_multiline and history:
+        data_asking = ["nombre", "teléfono", "correo", "ciudad", "datos", "registro", "completar"]
+        if any(k in last_bot for k in data_asking):
+            for city_line in msg_lines:
+                words = city_line.split()
+                if 1 <= len(words) <= 4 and not re.search(r'[\d@]', city_line) and "?" not in city_line:
+                    if extracted_name and city_line.lower() == extracted_name.lower():
+                        continue
+                    if any(k in city_line.lower() for k in ["mes", "semana", "día", "año"]):
+                        continue
+                    word_set = {w.rstrip("?!.,;:").lower() for w in city_line.split()}
+                    if word_set & _CITY_NOISE:
+                        continue
+                    return city_line
+
+    return None
+
+
+def _extract_payment(text: str) -> Optional[str]:
+    """Extract payment intent from message."""
+    msg = (text or "").lower()
+    neg_credit = [
+        r"\bno\b.{0,15}\b(crédito|credito|financiamiento|financiación|mensualidades)\b",
+        r"\bsin\b.{0,15}\b(crédito|credito|financiamiento|financiación)\b",
+    ]
+    neg_cash = [
+        r"\bno\b.{0,15}\b(contado|cash)\b",
+        r"\bsin\b.{0,15}\b(contado|cash)\b",
+    ]
+    if any(re.search(p, msg) for p in neg_credit):
+        return "Contado"
+    if any(re.search(p, msg) for p in neg_cash):
+        return "Crédito"
+    if any(k in msg for k in ["contado", "cash", "de contado"]):
+        return "Contado"
+    if any(k in msg for k in ["crédito", "credito", "financiamiento", "financiación", "mensualidades"]):
+        return "Crédito"
+    return None
+
+
+def _extract_appointment(text: str) -> Optional[str]:
+    """Basic Spanish appointment extractor for day/time."""
+    t = (text or "").strip().lower()
+    if not t:
+        return None
+
+    day: Optional[str] = None
+    if "mañana" in t and "por la mañana" not in t and "en la mañana" not in t:
+        day = "Mañana"
+    else:
+        for d in ["lunes", "martes", "miércoles", "miercoles", "jueves", "viernes", "sábado", "sabado", "domingo"]:
+            if d in t:
+                day = d.capitalize().replace("Miercoles", "Miércoles").replace("Sabado", "Sábado")
+                break
+
+    time_str: Optional[str] = None
+    if "medio dia" in t or "mediodía" in t or "medio día" in t:
+        time_str = "12:00"
+    if not time_str:
+        m = re.search(r"\b(\d{1,2})\s*y\s*media\b", t)
+        if m:
+            time_str = f"{int(m.group(1))}:30"
+    if not time_str:
+        m = re.search(r"\b(\d{1,2})\s*:\s*(\d{2})\b", t)
+        if m:
+            h, mm = int(m.group(1)), int(m.group(2))
+            if 0 <= h <= 23 and 0 <= mm <= 59:
+                time_str = f"{h}:{mm:02d}"
+    if not time_str:
+        m = re.search(r"\b(\d{1,2})\s*(am|pm)\b", t)
+        if m:
+            h = int(m.group(1))
+            if 1 <= h <= 12:
+                hh = h % 12 + (12 if m.group(2) == "pm" else 0)
+                time_str = f"{hh}:00"
+    if not time_str:
+        if "en la tarde" in t or "por la tarde" in t:
+            time_str = "(tarde)"
+        elif "en la mañana" in t or "por la mañana" in t:
+            time_str = "(mañana)"
+        elif "en la noche" in t or "por la noche" in t:
+            time_str = "(noche)"
+
+    def _fmt(h24: int, mm: str) -> str:
+        if h24 == 0: return f"12:{mm} AM"
+        if 1 <= h24 <= 11: return f"{h24}:{mm} AM"
+        if h24 == 12: return f"12:{mm} PM"
+        return f"{h24 - 12}:{mm} PM"
+
+    if day and time_str:
+        if re.fullmatch(r"\d{1,2}:\d{2}", time_str):
+            return f"{day} {_fmt(int(time_str.split(':')[0]), time_str.split(':')[1])}"
+        return f"{day} {time_str}"
+    if day:
+        return day
+    if time_str:
+        if re.fullmatch(r"\d{1,2}:\d{2}", time_str):
+            return _fmt(int(time_str.split(":")[0]), time_str.split(":")[1])
+        return time_str
+    return None
+
+
+def _extract_offer(text: str) -> Optional[str]:
+    """Extract offer amount from message."""
+    m = re.search(
+        r'(?:(?:te\s+)?(?:doy|ofrezco|propongo|pongo)|propuesta|oferta)\s*(?:de\s+)?\$?\s*(\d[\d,\.]*)\s*(?:mil|k)?'
+        r'|\$?\s*(\d[\d,\.]*)\s*(?:mil|k)\b',
+        text or "", re.IGNORECASE
+    )
+    if m:
+        raw = (m.group(1) or m.group(2) or "").replace(",", "").replace(".", "")
+        if raw.isdigit():
+            val = int(raw)
+            if val < 10000:
+                val *= 1000
+            return f"${val:,}"
+    return None
+
+
+def _extract_timeline(text: str, history: str) -> Optional[str]:
+    """Extract timeline/liquidation period from message."""
+    t = (text or "").lower().strip()
+    if not t:
+        return None
+
+    # Check if bot asked for timeline
+    last_bot = ""
+    if history:
+        for line in reversed(history.split("\n")):
+            if line.strip().startswith("A:"):
+                last_bot = line.lower()
+                break
+
+    timeline_asking = ["tiempo", "liquidar", "plazo", "estimado"]
+    bot_asked = any(k in last_bot for k in timeline_asking)
+
+    # Explicit patterns
+    patterns = [
+        r'(\d+)\s*(?:meses?|mes)',
+        r'(\d+)\s*(?:semanas?)',
+        r'(\d+)\s*(?:días?|dias?)',
+        r'(\d+)\s*(?:años?|anios?)',
+    ]
+    for p in patterns:
+        m = re.search(p, t)
+        if m:
+            return m.group(0).strip()
+
+    # Keywords
+    if any(k in t for k in ["inmediato", "inmediatamente", "ya", "lo antes posible", "cuanto antes"]):
+        return "Inmediato"
+
+    # If bot asked and reply is short, accept it as timeline
+    if bot_asked:
+        words = t.split()
+        if 1 <= len(words) <= 6 and not re.search(r'[@]', t):
+            return t.strip()
+
+    return None
+
+
+# ============================================================
 # INTENT CLASSIFIER (keyword-based, deterministic)
 # ============================================================
 
@@ -212,10 +607,12 @@ def classify_intent(
     slots: "Slots",
     last_action: Optional[Action] = None,
     new_data: Optional[Dict[str, str]] = None,
+    current_state: Optional[ConversationState] = None,
+    has_campaign: bool = False,
 ) -> Intent:
     """
     Deterministic intent classification from message keywords.
-    Returns the most likely intent.
+    Now context-aware: uses current_state and has_campaign to disambiguate.
     """
     msg = message.lower().strip()
     words_set = set(msg.split())
@@ -230,20 +627,29 @@ def classify_intent(
 
     # Check if providing data (in response to a previous ask)
     if new_data and any(new_data.get(k) for k in ("name", "email", "city", "phone", "offer_amount", "timeline")):
-        # If they also asked something, prioritize the data provision
-        # but check if there's also a question
         has_question = "?" in msg
         if not has_question:
             return Intent.PROVIDE_DATA
+        # Data + question: in campaign/collecting states, prioritize data
+        if current_state in (ConversationState.CAMPAIGN_ENTRY, ConversationState.COLLECTING_DATA):
+            return Intent.PROVIDE_DATA
 
-    # Check offer (campaign context)
+    # Check offer (campaign context — only meaningful in campaign states)
     if _OFFER_PATTERN.search(msg):
         return Intent.MAKE_OFFER
 
-    # Check confirm/deny
-    if msg in _CONFIRM_WORDS or msg.rstrip("?!., ") in _CONFIRM_WORDS:
+    # Check confirm/deny — context-aware
+    stripped = msg.rstrip("?!., ")
+    if msg in _CONFIRM_WORDS or stripped in _CONFIRM_WORDS:
+        # "sí" in CAMPAIGN_ENTRY = confirm participation
+        # "sí" in CATALOG_BROWSING = might mean something else
         return Intent.CONFIRM
-    if msg in _DENY_WORDS or msg.rstrip("?!., ") in _DENY_WORDS:
+    if msg in _DENY_WORDS or stripped in _DENY_WORDS:
+        # Simple "no" in campaign = deny, but "no gracias" = could be disinterest
+        if stripped == "no" and current_state == ConversationState.CAMPAIGN_ENTRY:
+            return Intent.DENY
+        if stripped in ("no gracias", "no me interesa"):
+            return Intent.DISINTEREST
         return Intent.DENY
 
     # Check specific intents
@@ -266,7 +672,7 @@ def classify_intent(
     if new_data and any(new_data.get(k) for k in ("name", "email", "city")):
         return Intent.PROVIDE_DATA
 
-    # Greeting (only if no other intent)
+    # Greeting (only if no other intent and early in conversation)
     if any(w in words_set for w in _GREETING_WORDS) and len(msg.split()) <= 5:
         return Intent.GREETING
 
@@ -301,159 +707,169 @@ def decide_action(
     """
     Pure deterministic function. NO LLM calls.
     Returns (action, new_state, metadata).
+
+    metadata includes:
+      - primary_flow: the main conversation track (campaign_registration, lead_qualification, browsing)
+      - is_side_question: True if the user asked something lateral without changing flow
     """
     meta: Dict[str, Any] = {}
 
+    # Determine primary flow
+    if has_campaign:
+        meta["primary_flow"] = "campaign_registration"
+    elif slots.interest and not slots.appointment:
+        meta["primary_flow"] = "lead_qualification"
+    elif slots.interest and slots.appointment:
+        meta["primary_flow"] = "qualified"
+    else:
+        meta["primary_flow"] = "browsing"
+
+    # Helper to return meta with primary_flow preserved
+    def _ret(action: Action, new_state: ConversationState, extra: Optional[Dict[str, Any]] = None) -> Tuple[Action, ConversationState, Dict[str, Any]]:
+        result = dict(meta)
+        if extra:
+            result.update(extra)
+        return action, new_state, result
+
     # ---- DISINTEREST: overrides everything ----
     if intent == Intent.DISINTEREST:
-        return Action.WAIT_MODE, ConversationState.WAITING, {"is_disinterest": True}
+        return _ret(Action.WAIT_MODE, ConversationState.WAITING, {"is_disinterest": True})
 
     # ---- WAIT: client wants to pause ----
     if intent == Intent.WAIT:
-        return Action.WAIT_MODE, ConversationState.WAITING, {}
+        return _ret(Action.WAIT_MODE, ConversationState.WAITING)
 
     # ---- GREETING state ----
     if state == ConversationState.GREETING:
         if has_campaign:
-            return Action.PRESENT_CAMPAIGN, ConversationState.CAMPAIGN_ENTRY, {}
+            return _ret(Action.PRESENT_CAMPAIGN, ConversationState.CAMPAIGN_ENTRY)
         else:
-            return Action.GREET, ConversationState.INTEREST_DISCOVERY, {}
+            return _ret(Action.GREET, ConversationState.INTEREST_DISCOVERY)
 
     # ---- CAMPAIGN_ENTRY state ----
     if state == ConversationState.CAMPAIGN_ENTRY:
-        # Handle questions during campaign (don't lose state)
         if intent in (Intent.ASK_PHOTOS, Intent.ASK_PDF):
             action = Action.SEND_PHOTOS if intent == Intent.ASK_PHOTOS else Action.SEND_PDF
-            return action, ConversationState.CAMPAIGN_ENTRY, {}
+            return _ret(action, ConversationState.CAMPAIGN_ENTRY)
 
         if intent == Intent.ASK_INVENTORY:
-            return Action.SHOW_INVENTORY, ConversationState.CATALOG_BROWSING, {"side_question": True}
+            return _ret(Action.SHOW_INVENTORY, ConversationState.CATALOG_BROWSING, {"is_side_question": True})
 
         if intent == Intent.MODEL_SWITCH:
-            return Action.ACKNOWLEDGE_SWITCH, ConversationState.INTEREST_DISCOVERY, {}
+            return _ret(Action.ACKNOWLEDGE_SWITCH, ConversationState.INTEREST_DISCOVERY)
 
         if intent in (Intent.ASK_QUESTION, Intent.ASK_PRICE, Intent.ASK_FINANCING,
                        Intent.ASK_LOCATION):
-            return Action.ANSWER_QUESTION, ConversationState.CAMPAIGN_ENTRY, {}
+            return _ret(Action.ANSWER_QUESTION, ConversationState.CAMPAIGN_ENTRY, {"is_side_question": True})
 
         # Check if data was provided or offer made
         if intent in (Intent.PROVIDE_DATA, Intent.MAKE_OFFER, Intent.CONFIRM):
-            # Determine next missing slot
             missing = _get_campaign_missing(slots)
             if not missing:
-                return Action.CONFIRM_REGISTRATION, ConversationState.QUALIFIED, {}
-            # Acknowledge what was given, ask for next
+                return _ret(Action.CONFIRM_REGISTRATION, ConversationState.QUALIFIED)
             next_slot = missing[0]
-            return Action.ACKNOWLEDGE_AND_ASK_NEXT, ConversationState.CAMPAIGN_ENTRY, {
+            return _ret(Action.ACKNOWLEDGE_AND_ASK_NEXT, ConversationState.CAMPAIGN_ENTRY, {
                 "next_slot": next_slot,
                 "acknowledged_data": new_data,
-            }
+            })
 
         # Default for campaign: check what's missing and ask
         missing = _get_campaign_missing(slots)
         if not missing:
-            return Action.CONFIRM_REGISTRATION, ConversationState.QUALIFIED, {}
+            return _ret(Action.CONFIRM_REGISTRATION, ConversationState.QUALIFIED)
         next_slot = missing[0]
-        return _SLOT_TO_ACTION.get(next_slot, Action.ASK_NAME), ConversationState.CAMPAIGN_ENTRY, {
+        return _ret(_SLOT_TO_ACTION.get(next_slot, Action.ASK_NAME), ConversationState.CAMPAIGN_ENTRY, {
             "next_slot": next_slot,
-        }
+        })
 
     # ---- INTEREST_DISCOVERY state ----
     if state == ConversationState.INTEREST_DISCOVERY:
         if intent == Intent.ASK_PHOTOS:
-            return Action.SEND_PHOTOS, ConversationState.INTEREST_DISCOVERY, {}
+            return _ret(Action.SEND_PHOTOS, ConversationState.INTEREST_DISCOVERY)
         if intent == Intent.ASK_PDF:
-            return Action.SEND_PDF, ConversationState.INTEREST_DISCOVERY, {}
+            return _ret(Action.SEND_PDF, ConversationState.INTEREST_DISCOVERY)
         if intent == Intent.ASK_INVENTORY:
-            return Action.SHOW_INVENTORY, ConversationState.CATALOG_BROWSING, {}
+            return _ret(Action.SHOW_INVENTORY, ConversationState.CATALOG_BROWSING)
 
-        # If interest was just detected, start collecting data
         if slots.interest and not slots.name:
-            return Action.ASK_NAME, ConversationState.COLLECTING_DATA, {}
+            return _ret(Action.ASK_NAME, ConversationState.COLLECTING_DATA)
         if not slots.interest:
-            # Answer their question but guide toward interest
             if intent in (Intent.ASK_QUESTION, Intent.ASK_PRICE, Intent.ASK_FINANCING):
-                return Action.ANSWER_QUESTION, ConversationState.INTEREST_DISCOVERY, {}
-            return Action.ASK_INTEREST, ConversationState.INTEREST_DISCOVERY, {}
+                return _ret(Action.ANSWER_QUESTION, ConversationState.INTEREST_DISCOVERY)
+            return _ret(Action.ASK_INTEREST, ConversationState.INTEREST_DISCOVERY)
 
-        return Action.ANSWER_QUESTION, ConversationState.INTEREST_DISCOVERY, {}
+        return _ret(Action.ANSWER_QUESTION, ConversationState.INTEREST_DISCOVERY)
 
     # ---- COLLECTING_DATA state ----
     if state == ConversationState.COLLECTING_DATA:
-        # Allow questions without losing state
         if intent in (Intent.ASK_PHOTOS, Intent.ASK_PDF):
             action = Action.SEND_PHOTOS if intent == Intent.ASK_PHOTOS else Action.SEND_PDF
-            return action, ConversationState.COLLECTING_DATA, {}
+            return _ret(action, ConversationState.COLLECTING_DATA)
 
         if intent == Intent.ASK_INVENTORY:
-            return Action.SHOW_INVENTORY, ConversationState.CATALOG_BROWSING, {"side_question": True}
+            return _ret(Action.SHOW_INVENTORY, ConversationState.CATALOG_BROWSING, {"is_side_question": True})
 
         if intent in (Intent.ASK_QUESTION, Intent.ASK_PRICE, Intent.ASK_FINANCING,
                        Intent.ASK_LOCATION):
-            return Action.ANSWER_QUESTION, ConversationState.COLLECTING_DATA, {}
+            return _ret(Action.ANSWER_QUESTION, ConversationState.COLLECTING_DATA, {"is_side_question": True})
 
         if intent == Intent.ASK_APPOINTMENT:
             if slots.name:
-                return Action.ASK_APPOINTMENT, ConversationState.APPOINTMENT_SCHEDULING, {}
+                return _ret(Action.ASK_APPOINTMENT, ConversationState.APPOINTMENT_SCHEDULING)
             else:
-                return Action.ASK_NAME, ConversationState.COLLECTING_DATA, {"reason": "need_name_for_appointment"}
+                return _ret(Action.ASK_NAME, ConversationState.COLLECTING_DATA, {"reason": "need_name_for_appointment"})
 
-        # Check for lead completion
         if not slots.missing_for_lead():
-            return Action.CONFIRM_LEAD, ConversationState.QUALIFIED, {}
+            return _ret(Action.CONFIRM_LEAD, ConversationState.QUALIFIED)
 
-        # Otherwise, acknowledge and ask next
         if intent == Intent.PROVIDE_DATA and new_data:
             missing = slots.missing_for_lead()
             if not missing:
-                return Action.CONFIRM_LEAD, ConversationState.QUALIFIED, {}
-            return Action.ACKNOWLEDGE_AND_ASK_NEXT, ConversationState.COLLECTING_DATA, {
+                return _ret(Action.CONFIRM_LEAD, ConversationState.QUALIFIED)
+            return _ret(Action.ACKNOWLEDGE_AND_ASK_NEXT, ConversationState.COLLECTING_DATA, {
                 "next_slot": missing[0],
                 "acknowledged_data": new_data,
-            }
+            })
 
-        # Default: ask for next missing
         missing = slots.missing_for_lead()
         if missing:
             next_slot = missing[0]
-            return _SLOT_TO_ACTION.get(next_slot, Action.ANSWER_QUESTION), ConversationState.COLLECTING_DATA, {}
+            return _ret(_SLOT_TO_ACTION.get(next_slot, Action.ANSWER_QUESTION), ConversationState.COLLECTING_DATA)
 
-        return Action.ANSWER_QUESTION, ConversationState.COLLECTING_DATA, {}
+        return _ret(Action.ANSWER_QUESTION, ConversationState.COLLECTING_DATA)
 
     # ---- APPOINTMENT_SCHEDULING state ----
     if state == ConversationState.APPOINTMENT_SCHEDULING:
         if slots.appointment:
-            return Action.CONFIRM_LEAD, ConversationState.QUALIFIED, {}
-        return Action.ASK_APPOINTMENT, ConversationState.APPOINTMENT_SCHEDULING, {}
+            return _ret(Action.CONFIRM_LEAD, ConversationState.QUALIFIED)
+        return _ret(Action.ASK_APPOINTMENT, ConversationState.APPOINTMENT_SCHEDULING)
 
     # ---- CATALOG_BROWSING state ----
     if state == ConversationState.CATALOG_BROWSING:
         if intent == Intent.ASK_PHOTOS:
-            return Action.SEND_PHOTOS, ConversationState.CATALOG_BROWSING, {}
+            return _ret(Action.SEND_PHOTOS, ConversationState.CATALOG_BROWSING)
         if intent == Intent.ASK_PDF:
-            return Action.SEND_PDF, ConversationState.CATALOG_BROWSING, {}
+            return _ret(Action.SEND_PDF, ConversationState.CATALOG_BROWSING)
         if intent == Intent.ASK_APPOINTMENT:
             if slots.name:
-                return Action.ASK_APPOINTMENT, ConversationState.APPOINTMENT_SCHEDULING, {}
-            return Action.ASK_NAME, ConversationState.COLLECTING_DATA, {"reason": "need_name_for_appointment"}
-        return Action.ANSWER_QUESTION, ConversationState.CATALOG_BROWSING, {}
+                return _ret(Action.ASK_APPOINTMENT, ConversationState.APPOINTMENT_SCHEDULING)
+            return _ret(Action.ASK_NAME, ConversationState.COLLECTING_DATA, {"reason": "need_name_for_appointment"})
+        return _ret(Action.ANSWER_QUESTION, ConversationState.CATALOG_BROWSING)
 
     # ---- QUALIFIED state (keep answering questions) ----
     if state == ConversationState.QUALIFIED:
         if intent == Intent.ASK_PHOTOS:
-            return Action.SEND_PHOTOS, ConversationState.QUALIFIED, {}
-        return Action.ANSWER_QUESTION, ConversationState.QUALIFIED, {}
+            return _ret(Action.SEND_PHOTOS, ConversationState.QUALIFIED)
+        return _ret(Action.ANSWER_QUESTION, ConversationState.QUALIFIED)
 
     # ---- WAITING state ----
     if state == ConversationState.WAITING:
-        # Client came back
         if intent == Intent.GREETING:
-            return Action.GREET, ConversationState.INTEREST_DISCOVERY, {}
-        # Resume from where we were
-        return Action.ANSWER_QUESTION, ConversationState.INTEREST_DISCOVERY, {}
+            return _ret(Action.GREET, ConversationState.INTEREST_DISCOVERY)
+        return _ret(Action.ANSWER_QUESTION, ConversationState.INTEREST_DISCOVERY)
 
     # Fallback
-    return Action.ANSWER_QUESTION, ConversationState.INTEREST_DISCOVERY, {}
+    return _ret(Action.ANSWER_QUESTION, ConversationState.INTEREST_DISCOVERY)
 
 
 def _get_campaign_missing(slots: Slots) -> List[str]:
@@ -541,11 +957,16 @@ def process_fsm(
 
     Returns:
         (action, new_state, slots, metadata)
+        metadata now includes:
+          - slot_changes: List[SlotChange] of what changed this turn
+          - primary_flow: str
+          - is_side_question: bool (optional)
     """
-    # Load slots from context
-    slots = Slots.from_context(context)
+    # Snapshot old slots BEFORE applying new data
+    old_slots = Slots.from_context(context)
 
-    # Apply new data to slots
+    # Load + apply new data
+    slots = Slots.from_context(context)
     for key, value in new_data.items():
         if value and hasattr(slots, key):
             setattr(slots, key, value)
@@ -553,7 +974,7 @@ def process_fsm(
     # Resolve current state
     state = resolve_state(context, slots, has_campaign, turn_count)
 
-    # Classify intent
+    # Classify intent (now context-aware)
     last_action_str = context.get("last_action")
     last_action = None
     if last_action_str:
@@ -562,7 +983,10 @@ def process_fsm(
         except ValueError:
             pass
 
-    intent = classify_intent(user_message, slots, last_action, new_data)
+    intent = classify_intent(
+        user_message, slots, last_action, new_data,
+        current_state=state, has_campaign=has_campaign,
+    )
 
     # Decide action
     action, new_state, meta = decide_action(
@@ -574,9 +998,18 @@ def process_fsm(
         turn_count=turn_count,
     )
 
+    # Compute slot changes for this turn
+    changes = diff_slots(old_slots, slots)
+    meta["slot_changes"] = changes
+
+    if changes:
+        change_strs = [f"{c.slot}: {c.old_value!r} → {c.new_value!r}" for c in changes]
+        logger.info(f"📊 Slot changes: {', '.join(change_strs)}")
+
     logger.info(
         f"🔀 FSM: {state.value} → {new_state.value} | "
         f"intent={intent.value} | action={action.value} | "
+        f"flow={meta.get('primary_flow', '?')} | "
         f"slots_filled={slots.filled_summary()}"
     )
 
