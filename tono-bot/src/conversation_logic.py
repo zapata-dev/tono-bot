@@ -1821,6 +1821,7 @@ async def _handle_message_fsm(
             context[ctx_key] = value
 
     has_campaign = bool(campaign and campaign.instructions)
+    campaign_type = (context.get("tracking_data") or {}).get("campaign_type", "A")
 
     # Run FSM
     action, new_state, slots, meta = process_fsm(
@@ -1829,6 +1830,7 @@ async def _handle_message_fsm(
         new_data=new_data,
         has_campaign=has_campaign,
         turn_count=turn_count,
+        campaign_type=campaign_type,
     )
 
     # Build last bot messages for anti-repetition
@@ -2130,6 +2132,9 @@ async def handle_message(
         # Common non-city words that slip through
         "te", "doy", "bien", "tienes", "mas", "quiero", "este", "ese",
         "mil", "pesos", "si", "no", "precio", "oferta", "propuesta",
+        "calidad", "baratos", "barato", "nuevo", "nuevos", "usado", "usados",
+        "mejor", "grande", "chico", "bueno", "buenos", "bonito",
+        "padrino", "jefe", "amigo", "compa",
     }
     _last_bot = ""
     # Direct city reply: if bot asked for city and reply is short with no numbers
