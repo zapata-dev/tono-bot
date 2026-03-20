@@ -395,6 +395,12 @@ class MondayService:
         self.adset_name_col_id = os.getenv("MONDAY_ADSET_NAME_COLUMN_ID")
         self.ad_name_col_id = os.getenv("MONDAY_AD_NAME_COLUMN_ID")
 
+        # --- V2.2 Optional Data Columns (email, city, offer) ---
+        # These are TEXT columns. If not configured, data goes as notes only.
+        self.email_col_id = os.getenv("MONDAY_EMAIL_COLUMN_ID")
+        self.city_col_id = os.getenv("MONDAY_CITY_COLUMN_ID")
+        self.offer_col_id = os.getenv("MONDAY_OFFER_COLUMN_ID")
+
         # --- V3: Tracking ID / Anuncios Board ---
         self.tracking_id_col_id = os.getenv("MONDAY_TRACKING_ID_COLUMN_ID")
         self.ads_board_id = os.getenv("MONDAY_ADS_BOARD_ID")
