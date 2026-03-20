@@ -223,6 +223,17 @@ def build_writer_prompt(
     action_prompt = action_prompt.replace("{new_interest}", meta.get("new_interest", ""))
 
     parts.append(action_prompt)
+
+    # When an offer was just provided, add validation guidance
+    if acknowledged_data.get("offer_amount") and campaign_instructions:
+        parts.append(
+            "\nIMPORTANTE SOBRE LA PROPUESTA:\n"
+            "- Compara el monto de la propuesta con el PRECIO DE SALIDA en las instrucciones de campaña.\n"
+            "- Si la propuesta es MENOR al precio de salida, informa amablemente que la propuesta debe ser "
+            "IGUAL O SUPERIOR al precio de salida para participar. Indica cuál es el precio de salida.\n"
+            "- Si es IGUAL o SUPERIOR, reconoce la propuesta positivamente y continúa con el registro.\n"
+            "- Sigue pidiendo el siguiente dato faltante después de tu comentario sobre la propuesta."
+        )
     parts.append("")
 
     # Conversation history (truncated)
@@ -316,6 +327,11 @@ def try_deterministic_response(
 
     # ACKNOWLEDGE_AND_ASK_NEXT: deterministic with acknowledged data
     if action == Action.ACKNOWLEDGE_AND_ASK_NEXT:
+        ack_data = meta.get("acknowledged_data") or {}
+        # If offer_amount was just provided, let LLM handle it so it can
+        # validate against starting price and respond contextually
+        if ack_data.get("offer_amount"):
+            return None
         next_slot = meta.get("next_slot", "")
         slot_label = _SLOT_LABELS.get(next_slot, next_slot)
         candidates = [t.replace("{slot_label}", slot_label) for t in _ACK_TEMPLATES]

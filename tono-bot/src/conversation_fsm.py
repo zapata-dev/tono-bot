@@ -686,7 +686,7 @@ _CONFIRM_WORDS = {"si", "sí", "dale", "ok", "okay", "este mismo", "ese", "claro
 _DENY_WORDS = {"no", "nel", "nah", "no gracias", "no me interesa"}
 _WAIT_WORDS = {"luego", "déjame ver", "dejame ver", "después", "despues", "ocupado", "ahorita no", "más tarde", "mas tarde", "lo pienso"}
 _DISINTEREST_WORDS = {"no me interesa", "ya no", "no quiero", "no gracias ya", "dejalo", "déjalo", "olvidalo", "olvídalo"}
-_PHOTO_WORDS = {"foto", "fotos", "imagen", "imagenes", "ver", "mándame", "mandame", "envíame", "enviame", "otra foto", "más fotos"}
+_PHOTO_WORDS = {"foto", "fotos", "imagen", "imagenes", "mándame", "mandame", "envíame", "enviame", "otra foto", "más fotos"}
 _PDF_WORDS = {"ficha", "ficha técnica", "ficha tecnica", "specs", "corrida", "simulación", "simulacion"}
 _FINANCING_WORDS = {"financiamiento", "crédito", "credito", "mensualidad", "enganche", "plazo", "mensual"}
 _LOCATION_WORDS = {"ubicación", "ubicacion", "dónde", "donde", "dirección", "direccion", "mapa"}
@@ -754,15 +754,15 @@ def classify_intent(
             return Intent.DISINTEREST
         return Intent.DENY
 
-    # Check specific intents
+    # Check specific intents — location before photos to avoid "verla" matching "ver"
+    if any(w in msg for w in _LOCATION_WORDS):
+        return Intent.ASK_LOCATION
     if any(w in msg for w in _PHOTO_WORDS):
         return Intent.ASK_PHOTOS
     if any(w in msg for w in _PDF_WORDS):
         return Intent.ASK_PDF
     if any(w in msg for w in _FINANCING_WORDS):
         return Intent.ASK_FINANCING
-    if any(w in msg for w in _LOCATION_WORDS):
-        return Intent.ASK_LOCATION
     if any(w in msg for w in _APPOINTMENT_WORDS):
         return Intent.ASK_APPOINTMENT
     if any(w in msg for w in _INVENTORY_WORDS):
