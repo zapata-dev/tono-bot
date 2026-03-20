@@ -74,6 +74,17 @@ _ACTION_PROMPTS: Dict[Action, str] = {
         "Sé natural: '¿Cuál sería tu tiempo estimado para liquidar?'"
     ),
 
+    Action.ASK_OFFER: (
+        "ACCIÓN: Pide al cliente el monto de su propuesta/oferta.\n"
+        "Sé natural: '¿Cuál sería el monto de tu propuesta?'"
+    ),
+
+    Action.SOFT_DENY: (
+        "ACCIÓN: El cliente dijo 'no' o dudó. NO cierres la conversación.\n"
+        "Responde de forma comercial: quita presión, ofrece valor, mantén la puerta abierta.\n"
+        "Ejemplo: 'No te preocupes, no hay compromiso. Si te interesa conocer más sobre la unidad, aquí estoy.'"
+    ),
+
     Action.CONFIRM_REGISTRATION: (
         "ACCIÓN: Confirma que todos los datos fueron registrados. Un asesor se pondrá en contacto.\n"
         "Datos registrados: {slots_summary}\n"
@@ -143,6 +154,7 @@ _SLOT_LABELS = {
     "email": "correo electrónico",
     "city": "ciudad",
     "timeline": "tiempo estimado para liquidar",
+    "offer_amount": "monto de tu propuesta",
     "appointment": "día y hora para la cita",
     "interest": "modelo de interés",
     "payment": "forma de pago",
@@ -250,6 +262,16 @@ _DETERMINISTIC_TEMPLATES: Dict[Action, List[str]] = {
         "¿Cuál sería tu tiempo estimado para liquidar?",
         "¿En cuánto tiempo planeas cerrar la compra?",
         "¿Tienes un plazo estimado para la adquisición?",
+    ],
+    Action.ASK_OFFER: [
+        "¿Cuál sería el monto de tu propuesta?",
+        "¿Qué monto tienes en mente para tu oferta?",
+        "Para registrar tu propuesta, ¿de cuánto sería el monto?",
+    ],
+    Action.SOFT_DENY: [
+        "No te preocupes, no hay compromiso. Si te interesa conocer más sobre la unidad, con gusto te apoyo.",
+        "Sin problema, no hay presión. La información queda a tu disposición por si más adelante te interesa.",
+        "Entendido. Si en algún momento quieres más detalles o tienes alguna duda, aquí estoy para ayudarte.",
     ],
     Action.WAIT_MODE: [
         "Sin problema, aquí quedo pendiente.",

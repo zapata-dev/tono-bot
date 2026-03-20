@@ -66,6 +66,8 @@ class Action(str, Enum):
     ASK_EMAIL = "ask_email"
     ASK_CITY = "ask_city"
     ASK_TIMELINE = "ask_timeline"         # Campaign: liquidation time
+    ASK_OFFER = "ask_offer"               # Campaign: ask for offer/propuesta amount
+    SOFT_DENY = "soft_deny"               # Commercial response to "no" — destrabar
     CONFIRM_REGISTRATION = "confirm_registration"  # All campaign data collected
     ANSWER_QUESTION = "answer_question"   # Answer with inventory/business context
     SHOW_INVENTORY = "show_inventory"
@@ -220,11 +222,54 @@ _CITY_NOISE = {
     "te", "doy", "bien", "tienes", "mas", "quiero", "este", "ese",
     "mil", "pesos", "si", "no", "precio", "oferta", "propuesta",
     "hola", "buenas", "buenos", "ok", "gracias", "perfecto",
+    "calidad", "baratos", "barato", "nuevo", "nuevos", "usado", "usados",
+    "mejor", "grande", "chico", "bueno", "buenos", "bonito",
+    "padrino", "jefe", "amigo", "compa",
 }
 
 _CITY_PATTERNS = [
     r'\b(?:de|en|desde|vivo en|soy de|ciudad)\s+([A-ZÁÉÍÓÚÑa-záéíóúñ]+(?:[,\s]+[A-ZÁÉÍÓÚÑa-záéíóúñ]+){0,3})',
 ]
+
+# Mexican states and country names — stripped from city extractions
+_STATE_COUNTRY = {
+    "mexico", "méxico", "mx",
+    "jalisco", "guanajuato", "puebla", "veracruz", "oaxaca", "chiapas",
+    "tabasco", "guerrero", "michoacán", "michoacan", "sonora", "sinaloa",
+    "durango", "chihuahua", "coahuila", "tamaulipas", "zacatecas",
+    "aguascalientes", "hidalgo", "querétaro", "queretaro", "morelos",
+    "tlaxcala", "nayarit", "colima", "campeche", "yucatán", "yucatan",
+    "quintanaroo", "quintana", "bcs", "bcn",
+    "nuevo", "león", "leon",  # "Nuevo León" as parts
+    "san", "luis", "potosí", "potosi",  # "San Luis Potosí" as parts
+    "estado", "república", "republica",
+}
+
+
+def _normalize_city(city: str) -> str:
+    """Strip state/country suffixes and title-case the city name.
+    'agrandas jalisco mexico' → 'Agrandas'
+    'León Guanajuato' → 'León'
+    'CDMX' → 'CDMX'
+    """
+    words = city.strip().split()
+    if not words:
+        return city
+
+    # Remove trailing state/country words
+    clean = []
+    for w in words:
+        w_stripped = w.rstrip(",;.")
+        if w_stripped.lower() in _STATE_COUNTRY and clean:
+            # Only strip if we already have at least one city word
+            break
+        clean.append(w_stripped)
+
+    result = " ".join(clean)
+    # Title case unless it's an acronym (CDMX, etc.)
+    if result.isupper() and len(result) <= 5:
+        return result
+    return result.title()
 
 _NAME_BAD_WORDS = {
     "aqui", "aquí", "nadie", "yo", "el", "ella", "amigo", "desconocido",
@@ -237,6 +282,7 @@ _NAME_BAD_WORDS = {
     "cotización", "cotizacion", "modelo", "camioneta", "camion", "camión",
     "credito", "crédito", "contado", "financiamiento",
     "quiero", "necesito", "busco", "tengo", "puedo", "estoy",
+    "es", "eso", "ese", "esa", "este", "esta", "eh", "ah",
 }
 
 _NAME_TRAILING_STOP = {
@@ -248,6 +294,7 @@ _NAME_TRAILING_STOP = {
     "una", "un", "la", "el", "lo", "las", "los",
     "favor", "pregunta", "consulta", "duda",
     "buenos", "buenas", "buen",
+    "hablando", "andamos", "estamos", "andas", "estas",
 }
 
 
@@ -346,6 +393,9 @@ def _extract_name(text: str, history: str) -> Optional[str]:
             name_clean = " ".join(words)
             if name_clean.lower() in _NAME_BAD_WORDS:
                 return None
+            # Reject if first word is a common non-name word (articles, pronouns)
+            if words[0].lower() in _NAME_BAD_WORDS:
+                return None
             return " ".join(w.capitalize() for w in name_clean.split())
 
     # Context-aware: bot just asked for name → accept plain 1-4 word reply
@@ -411,6 +461,8 @@ def _extract_city(
                 if word_set & _CITY_NOISE:
                     logger.info(f"🏙️ Ciudad descartada (ruido): {candidate}")
                     continue
+                # Normalize: strip state/country suffixes (jalisco, mexico, etc.)
+                candidate = _normalize_city(candidate)
                 return candidate
 
     # Multi-line fallback
@@ -567,10 +619,13 @@ def _extract_timeline(text: str, history: str) -> Optional[str]:
         return "Inmediato"
 
     # If bot asked and reply is short, accept it as timeline
+    # BUT reject bare deny/confirm words — those are intents, not timelines
+    _timeline_reject = {"no", "si", "sí", "ok", "ya", "eh", "va", "dale", "nel", "nah", "bueno"}
     if bot_asked:
         words = t.split()
         if 1 <= len(words) <= 6 and not re.search(r'[@]', t):
-            return t.strip()
+            if t.strip() not in _timeline_reject:
+                return t.strip()
 
     return None
 
@@ -580,7 +635,7 @@ def _extract_timeline(text: str, history: str) -> Optional[str]:
 # ============================================================
 
 _GREETING_WORDS = {"hola", "buenas", "buenos", "hey", "hi", "buen dia", "buenas tardes", "buenas noches", "qué tal"}
-_CONFIRM_WORDS = {"si", "sí", "dale", "ok", "okay", "este mismo", "ese", "claro", "va", "perfecto", "eso", "correcto", "exacto", "afirmativo"}
+_CONFIRM_WORDS = {"si", "sí", "dale", "ok", "okay", "este mismo", "ese", "claro", "va", "perfecto", "eso", "correcto", "exacto", "afirmativo", "listo"}
 _DENY_WORDS = {"no", "nel", "nah", "no gracias", "no me interesa"}
 _WAIT_WORDS = {"luego", "déjame ver", "dejame ver", "después", "despues", "ocupado", "ahorita no", "más tarde", "mas tarde", "lo pienso"}
 _DISINTEREST_WORDS = {"no me interesa", "ya no", "no quiero", "no gracias ya", "dejalo", "déjalo", "olvidalo", "olvídalo"}
@@ -686,6 +741,8 @@ def classify_intent(
 
 # Campaign required slots in order of collection
 _CAMPAIGN_SLOT_ORDER = ["name", "email", "city", "timeline"]
+# Special campaign types (SU/LQ/PR/EV) also require offer_amount
+_CAMPAIGN_OFFER_TYPES = {"SU", "LQ", "PR", "EV"}
 
 # Slot → Action mapping
 _SLOT_TO_ACTION = {
@@ -693,6 +750,7 @@ _SLOT_TO_ACTION = {
     "email": Action.ASK_EMAIL,
     "city": Action.ASK_CITY,
     "timeline": Action.ASK_TIMELINE,
+    "offer_amount": Action.ASK_OFFER,
 }
 
 
@@ -703,6 +761,7 @@ def decide_action(
     new_data: Dict[str, str],
     has_campaign: bool,
     turn_count: int,
+    campaign_type: str = "A",
 ) -> Tuple[Action, ConversationState, Dict[str, Any]]:
     """
     Pure deterministic function. NO LLM calls.
@@ -762,9 +821,13 @@ def decide_action(
                        Intent.ASK_LOCATION):
             return _ret(Action.ANSWER_QUESTION, ConversationState.CAMPAIGN_ENTRY, {"is_side_question": True})
 
+        # DENY in campaign: respond commercially (destrabar), stay in campaign
+        if intent == Intent.DENY:
+            return _ret(Action.SOFT_DENY, ConversationState.CAMPAIGN_ENTRY)
+
         # Check if data was provided or offer made
         if intent in (Intent.PROVIDE_DATA, Intent.MAKE_OFFER, Intent.CONFIRM):
-            missing = _get_campaign_missing(slots)
+            missing = _get_campaign_missing(slots, campaign_type)
             if not missing:
                 return _ret(Action.CONFIRM_REGISTRATION, ConversationState.QUALIFIED)
             next_slot = missing[0]
@@ -774,7 +837,7 @@ def decide_action(
             })
 
         # Default for campaign: check what's missing and ask
-        missing = _get_campaign_missing(slots)
+        missing = _get_campaign_missing(slots, campaign_type)
         if not missing:
             return _ret(Action.CONFIRM_REGISTRATION, ConversationState.QUALIFIED)
         next_slot = missing[0]
@@ -872,15 +935,17 @@ def decide_action(
     return _ret(Action.ANSWER_QUESTION, ConversationState.INTEREST_DISCOVERY)
 
 
-def _get_campaign_missing(slots: Slots) -> List[str]:
-    """Returns missing campaign slots in collection order."""
+def _get_campaign_missing(slots: Slots, campaign_type: str = "A") -> List[str]:
+    """Returns missing campaign slots in collection order.
+    For SU/LQ/PR/EV campaigns, offer_amount is required.
+    """
     missing = []
-    if not slots.offer_amount:
-        # Don't add to missing — the campaign instructions guide this
-        pass
     for slot_name in _CAMPAIGN_SLOT_ORDER:
         if not getattr(slots, slot_name, None):
             missing.append(slot_name)
+    # Special campaigns require offer_amount
+    if campaign_type.upper() in _CAMPAIGN_OFFER_TYPES and not slots.offer_amount:
+        missing.append("offer_amount")
     return missing
 
 
@@ -914,7 +979,8 @@ def resolve_state(
         return ConversationState.CAMPAIGN_ENTRY
 
     if has_campaign and slots.name:
-        missing = _get_campaign_missing(slots)
+        campaign_type = context.get("tracking_data", {}).get("campaign_type", "A")
+        missing = _get_campaign_missing(slots, campaign_type)
         if missing:
             return ConversationState.CAMPAIGN_ENTRY
         return ConversationState.QUALIFIED
@@ -944,6 +1010,7 @@ def process_fsm(
     new_data: Dict[str, str],
     has_campaign: bool,
     turn_count: int,
+    campaign_type: str = "A",
 ) -> Tuple[Action, ConversationState, Slots, Dict[str, Any]]:
     """
     Main FSM entry point. Called from handle_message().
@@ -996,6 +1063,7 @@ def process_fsm(
         new_data=new_data,
         has_campaign=has_campaign,
         turn_count=turn_count,
+        campaign_type=campaign_type,
     )
 
     # Compute slot changes for this turn

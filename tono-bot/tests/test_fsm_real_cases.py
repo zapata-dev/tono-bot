@@ -453,6 +453,152 @@ def test_legacy_guard_end_to_end():
 
 
 # ============================================================
+# CASE 24: "calidad" not extracted as city
+# ============================================================
+def test_calidad_not_city():
+    """'y de calidad' should NOT extract 'calidad' as a city."""
+    e = extract_entities_for_fsm("baratos y de calidad", "", {})
+    assert "city" not in e, f"'calidad' should not be extracted as city: {e}"
+    print("✅ CASE 24: 'calidad' not extracted as city")
+
+
+# ============================================================
+# CASE 25: "No" not extracted as timeline
+# ============================================================
+def test_no_not_timeline():
+    """Bare 'no' should NOT be extracted as timeline even when bot asked."""
+    history = "A: ¿Cuál es tu tiempo estimado para liquidar?"
+    e = extract_entities_for_fsm("no", history, {})
+    assert "timeline" not in e, f"'no' should not be timeline: {e}"
+    # But a real timeline should still work
+    e2 = extract_entities_for_fsm("unos 3 meses", history, {})
+    assert e2.get("timeline") == "3 meses", f"Should extract '3 meses': {e2}"
+    print("✅ CASE 25: 'No' not extracted as timeline")
+
+
+# ============================================================
+# CASE 26: DENY in campaign → SOFT_DENY (destrabar)
+# ============================================================
+def test_deny_in_campaign_soft():
+    """'no' in campaign should trigger SOFT_DENY, not close the conversation."""
+    context = {"fsm_state": "campaign_entry", "last_interest": "Cascadia"}
+    action, state, slots, meta = process_fsm(
+        user_message="no",
+        context=context,
+        new_data={},
+        has_campaign=True,
+        turn_count=3,
+    )
+    assert action == Action.SOFT_DENY, f"Expected SOFT_DENY, got {action}"
+    assert state == ConversationState.CAMPAIGN_ENTRY, f"Should stay in campaign_entry, got {state}"
+    print("✅ CASE 26: DENY in campaign → SOFT_DENY (stays in campaign)")
+
+
+# ============================================================
+# CASE 27: SOFT_DENY has deterministic templates
+# ============================================================
+def test_soft_deny_deterministic():
+    """SOFT_DENY should have deterministic templates (skip LLM)."""
+    from src.llm_writer import try_deterministic_response
+    result = try_deterministic_response(Action.SOFT_DENY, Slots(), turn_count=1, jid="test")
+    assert result is not None, "SOFT_DENY should have deterministic template"
+    assert "compromiso" in result or "presión" in result or "duda" in result, \
+        f"SOFT_DENY should be commercial/friendly: {result}"
+    print(f"✅ CASE 27: SOFT_DENY deterministic = '{result[:60]}...'")
+
+
+# ============================================================
+# CASE 28: offer_amount required for SU campaigns
+# ============================================================
+def test_offer_required_for_su_campaign():
+    """SU campaign should require offer_amount before confirming registration."""
+    context = {"fsm_state": "campaign_entry", "last_interest": "Cascadia",
+               "tracking_data": {"campaign_type": "SU"}}
+    # All standard slots filled, but no offer_amount
+    context["user_name"] = "Pedro"
+    context["user_email"] = "pedro@test.com"
+    context["user_city"] = "CDMX"
+    context["timeline"] = "1 mes"
+    action, state, slots, meta = process_fsm(
+        user_message="listo",
+        context=context,
+        new_data={},
+        has_campaign=True,
+        turn_count=6,
+        campaign_type="SU",
+    )
+    # Should NOT confirm registration — should ask for offer
+    assert action != Action.CONFIRM_REGISTRATION, \
+        f"Should not confirm without offer_amount for SU campaign, got {action}"
+    # FSM acknowledges the confirm and asks for next missing slot (offer_amount)
+    assert action == Action.ACKNOWLEDGE_AND_ASK_NEXT, f"Expected ACKNOWLEDGE_AND_ASK_NEXT, got {action}"
+    assert meta.get("next_slot") == "offer_amount", f"next_slot should be offer_amount: {meta}"
+    print("✅ CASE 28: SU campaign requires offer_amount before confirming")
+
+
+# ============================================================
+# CASE 29: ASK_OFFER has deterministic templates
+# ============================================================
+def test_ask_offer_deterministic():
+    """ASK_OFFER should have deterministic templates."""
+    from src.llm_writer import try_deterministic_response
+    result = try_deterministic_response(Action.ASK_OFFER, Slots(), turn_count=1, jid="test")
+    assert result is not None, "ASK_OFFER should have deterministic template"
+    assert "propuesta" in result or "monto" in result or "oferta" in result, \
+        f"ASK_OFFER should ask for offer: {result}"
+    print(f"✅ CASE 29: ASK_OFFER deterministic = '{result}'")
+
+
+# ============================================================
+# CASE 30: Name extraction rejects conversational phrases
+# ============================================================
+def test_name_rejects_conversational():
+    """'Es con el qur andamos hablando' should NOT extract a name."""
+    e = extract_entities_for_fsm("Es con el qur andamos hablando", "", {})
+    name = e.get("name")
+    assert name is None, f"Should not extract name from conversational phrase: {name}"
+    print("✅ CASE 30: 'Es con el qur andamos hablando' → no name extracted")
+
+
+# ============================================================
+# CASE 31: City normalization strips state/country
+# ============================================================
+def test_city_normalization():
+    """'Soy de agrandas jalisco mexico' → 'Agrandas' (not full phrase)."""
+    e = extract_entities_for_fsm("Soy de agrandas jalisco mexico", "", {})
+    city = e.get("city")
+    assert city is not None, "Should extract a city"
+    assert "jalisco" not in city.lower(), f"State should be stripped: {city}"
+    assert "mexico" not in city.lower(), f"Country should be stripped: {city}"
+    assert city == "Agrandas", f"Expected 'Agrandas', got '{city}'"
+    print(f"✅ CASE 31: City normalized = '{city}'")
+
+
+# ============================================================
+# CASE 32: Regular (A) campaign does NOT require offer_amount
+# ============================================================
+def test_regular_campaign_no_offer_required():
+    """Regular (A) campaign should NOT require offer_amount."""
+    context = {"fsm_state": "campaign_entry", "last_interest": "Cascadia",
+               "tracking_data": {"campaign_type": "A"}}
+    context["user_name"] = "Pedro"
+    context["user_email"] = "pedro@test.com"
+    context["user_city"] = "CDMX"
+    context["timeline"] = "1 mes"
+    action, state, slots, meta = process_fsm(
+        user_message="listo",
+        context=context,
+        new_data={},
+        has_campaign=True,
+        turn_count=6,
+        campaign_type="A",
+    )
+    assert action == Action.CONFIRM_REGISTRATION, \
+        f"Regular campaign should confirm without offer, got {action}"
+    print("✅ CASE 32: Regular (A) campaign confirms without offer_amount")
+
+
+# ============================================================
 # RUN ALL
 # ============================================================
 if __name__ == "__main__":
@@ -491,6 +637,16 @@ if __name__ == "__main__":
         test_slot_changes_serialization,
         test_slot_to_monday_mapping,
         test_legacy_guard_end_to_end,
+        # V2.3 tests — production fixes
+        test_calidad_not_city,
+        test_no_not_timeline,
+        test_deny_in_campaign_soft,
+        test_soft_deny_deterministic,
+        test_offer_required_for_su_campaign,
+        test_ask_offer_deterministic,
+        test_name_rejects_conversational,
+        test_city_normalization,
+        test_regular_campaign_no_offer_required,
     ]
 
     passed = 0
