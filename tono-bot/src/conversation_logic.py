@@ -931,11 +931,10 @@ def _extract_photos_from_item(item: Dict[str, Any]) -> List[str]:
 
 
 def _extract_location_link(
-    inventory_service, last_interest: str, interest_ubicacion: str = ""
+    inventory_service, last_interest: str, interest_ubicacion: str = "", user_city: str = ""
 ) -> Optional[str]:
     """Extract ubicacion_link from inventory for the model of interest.
-    If interest_ubicacion is provided, prefer the item matching both model
-    and the specific unit's location.
+    Priority: 1) interest_ubicacion (explicit), 2) user_city slot, 3) first matching item.
     """
     items = getattr(inventory_service, "items", None) or []
     if not items or not last_interest:
@@ -948,7 +947,9 @@ def _extract_location_link(
         return None
 
     ubic_norm = _normalize_spanish(interest_ubicacion) if interest_ubicacion else ""
-    best_link = None
+    user_city_clean = _strip_accents(_normalize_spanish(user_city)) if user_city else ""
+    best_link = None       # fallback: first matching item
+    city_match_link = None  # secondary: user_city match
 
     for item in items:
         modelo = _safe_get(item, ["Modelo", "modelo", "id_modelo"]).strip()
@@ -962,18 +963,26 @@ def _extract_location_link(
         if not link:
             continue
 
-        # If unit location matches, return immediately (best match)
+        item_ubic_raw = _safe_get(item, ["ubicacion", "Ubicacion", "ubicación"])
+        item_ubic = _strip_accents(_normalize_spanish(item_ubic_raw))
+
+        # Priority 1: explicit interest_ubicacion match → return immediately
         if ubic_norm:
-            item_ubic = _strip_accents(_normalize_spanish(_safe_get(item, ["ubicacion", "Ubicacion", "ubicación"])))
             ubic_norm_clean = _strip_accents(ubic_norm)
             if ubic_norm_clean in item_ubic or item_ubic in ubic_norm_clean:
                 return link
 
-        # Otherwise store as fallback
+        # Priority 2: user_city slot match
+        if user_city_clean and not city_match_link:
+            if user_city_clean in item_ubic or item_ubic in user_city_clean:
+                city_match_link = link
+                logger.info(f"📍 Location link resolved via user_city='{user_city}': {item_ubic_raw}")
+
+        # Fallback: first matching link
         if not best_link:
             best_link = link
 
-    return best_link
+    return city_match_link or best_link
 
 
 def _detect_vehicle_ubicacion(
@@ -1562,18 +1571,30 @@ def _pick_media_urls(
 
     # Vehicle ubicacion from context — identifies which specific unit the user wants
     interest_ubicacion = _normalize_spanish((context.get("interest_ubicacion") or "").strip())
+    # user_city: ciudad del cliente (slot CIUDAD de la campaña) — secondary disambiguation signal
+    user_city = _normalize_spanish((context.get("user_city") or "").strip())
 
     def _prefer_unit_item(candidates: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        """Among matching items, prefer the one whose ubicacion matches the unit of interest."""
+        """Among matching items, prefer the one whose ubicacion matches the unit of interest.
+        Priority: 1) explicit interest_ubicacion, 2) user_city slot, 3) first item.
+        """
         if not candidates:
             return None
-        if not interest_ubicacion:
-            return candidates[0]
-        interest_ubic_clean = _strip_accents(_normalize_spanish(interest_ubicacion))
-        for c in candidates:
-            ubic = _strip_accents(_normalize_spanish(_safe_get(c, ["ubicacion", "Ubicacion", "ubicación"])))
-            if interest_ubic_clean in ubic or ubic in interest_ubic_clean:
-                return c
+        # Priority 1: explicit interest_ubicacion (e.g. user said "la de León")
+        if interest_ubicacion:
+            interest_ubic_clean = _strip_accents(_normalize_spanish(interest_ubicacion))
+            for c in candidates:
+                ubic = _strip_accents(_normalize_spanish(_safe_get(c, ["ubicacion", "Ubicacion", "ubicación"])))
+                if interest_ubic_clean in ubic or ubic in interest_ubic_clean:
+                    return c
+        # Priority 2: user_city slot (CIUDAD captured during campaign registration)
+        if user_city and len(candidates) > 1:
+            user_city_clean = _strip_accents(_normalize_spanish(user_city))
+            for c in candidates:
+                ubic = _strip_accents(_normalize_spanish(_safe_get(c, ["ubicacion", "Ubicacion", "ubicación"])))
+                if user_city_clean in ubic or ubic in user_city_clean:
+                    logger.info(f"📸 Unit resolved via user_city='{user_city}': ubicacion='{_safe_get(c, ['ubicacion'])}'")
+                    return c
         return candidates[0]  # fallback to first if no ubicacion match
 
     # 4) Detectar qué modelo quiere ver
@@ -1676,6 +1697,11 @@ def _pick_media_urls(
     logger.info(f"📸 Fotos seleccionadas: modelo='{target_model_name}', {len(urls)} URLs, last_interest='{last_interest}', ubicacion='{item_ubic}'")
     if not urls:
         return []
+
+    # Lock in this unit's ubicacion so subsequent ask_location uses the same item
+    if item_ubic and not context.get("interest_ubicacion"):
+        context["interest_ubicacion"] = item_ubic
+        logger.info(f"📸 interest_ubicacion fijado desde fotos: '{item_ubic}'")
 
     # 6) Si cambió de modelo, reiniciar índice
     if _normalize_spanish(target_model_name) != _normalize_spanish(current_photo_model):
@@ -2120,6 +2146,7 @@ async def _handle_message_fsm(
         location_link = _extract_location_link(
             inventory_service, slots.interest,
             new_context.get("interest_ubicacion", ""),
+            new_context.get("user_city", ""),
         )
         if location_link:
             logger.info(f"📍 Location link found: {location_link}")
