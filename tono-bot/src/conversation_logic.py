@@ -927,7 +927,10 @@ def _extract_photos_from_item(item: Dict[str, Any]) -> List[str]:
     raw = _safe_get(item, ["photos", "photo", "foto", "imagen", "imagenes", "fotos"])
     if not raw:
         return []
-    return [u.strip() for u in raw.split("|") if u.strip().startswith("http")]
+    # Support "|", ",", or newline as separators (Google Sheets multi-line cells use \n)
+    import re as _re
+    parts = _re.split(r"[|\n,]+", raw)
+    return [u.strip() for u in parts if u.strip().startswith("http")]
 
 
 def _extract_location_link(
