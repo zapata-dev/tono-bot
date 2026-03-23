@@ -160,7 +160,7 @@ class GlobalState:
 
         # 🔒 LOCK PER JID: Evita procesamiento concurrente para el mismo usuario
         # Sin esto, dos lotes de mensajes pueden correr en paralelo, leer contexto
-        # stale de SQLite, y el segundo sobreescribir el contexto del primero.
+        # stale de Supabase, y el segundo sobreescribir el contexto del primero.
         self.processing_locks: Dict[str, asyncio.Lock] = {}
 
 
@@ -625,7 +625,7 @@ async def _process_accumulated_messages(bot_state: GlobalState, remote_jid: str)
 
     Usa un lock per-JID para evitar procesamiento concurrente del mismo usuario.
     Sin esto, si llegan mensajes rápidos, dos lotes pueden correr en paralelo,
-    ambos leer contexto stale de SQLite, y el segundo sobreescribir el contexto
+    ambos leer contexto stale de Supabase, y el segundo sobreescribir el contexto
     correcto del primero (causando pérdida de modelo de interés, etc).
     """
     # Obtener o crear lock para este JID

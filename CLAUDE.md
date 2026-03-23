@@ -12,7 +12,7 @@
 - Audio message transcription (Whisper API)
 - Image analysis via Vision API (Gemini/OpenAI)
 - Human handoff detection
-- Conversation memory with SQLite persistence
+- Conversation memory with Supabase (PostgreSQL) persistence
 - Photo carousel for vehicles
 - PDF sending (fichas técnicas + corridas financieras) from financing.json
 - Message accumulation (debouncing) for rapid messages
@@ -40,7 +40,7 @@
     │   ├── main.py                 # FastAPI entry point, webhooks, debouncing, vision (~1520 lines)
     │   ├── conversation_logic.py   # Dual LLM handler, prompts, PDF detection (~1960 lines)
     │   ├── inventory_service.py    # Vehicle inventory from CSV/Google Sheets (~110 lines)
-    │   ├── memory_store.py         # SQLite session persistence (~60 lines)
+    │   ├── memory_store.py         # Supabase session persistence (~80 lines)
     │   └── monday_service.py       # Monday.com CRM integration, funnel V2 (~800 lines)
     └── data/
         ├── inventory.csv           # Vehicle catalog (8 models)
@@ -55,7 +55,7 @@
 | Server | Uvicorn 0.30.6 |
 | Runtime | Python 3.11 |
 | HTTP Client | httpx 0.27.2 (async) |
-| Database | SQLite via aiosqlite 0.20.0 |
+| Database | Supabase (PostgreSQL) via supabase-py 2.13.0 |
 | AI (Primary) | Google Gemini via OpenAI SDK (gemini-2.5-flash-lite) |
 | AI (Fallback) | OpenAI API (gpt-4o-mini) |
 | AI (Audio) | OpenAI Whisper API |
@@ -77,6 +77,8 @@ EVOLUTION_API_URL        # Evolution API endpoint
 EVOLUTION_API_KEY        # Evolution API authentication
 OPENAI_API_KEY           # OpenAI API key (fallback LLM + Whisper)
 GEMINI_API_KEY           # Google Gemini API key (primary LLM)
+SUPABASE_URL             # Supabase project URL (https://xxxx.supabase.co)
+SUPABASE_KEY             # Supabase anon/service_role key
 ```
 
 ### Optional (with defaults)
@@ -94,7 +96,6 @@ MESSAGE_ACCUMULATION_SECONDS=8.0       # Debounce window for rapid messages
 # --- Data Sources ---
 SHEET_CSV_URL=""                       # Google Sheets CSV URL for inventory
 INVENTORY_REFRESH_SECONDS=300          # Inventory cache TTL
-SQLITE_PATH="/app/tono-bot/db/memory.db"  # SQLite database path
 
 # --- Handoff ---
 TEAM_NUMBERS=""                        # Comma-separated handoff numbers
@@ -409,9 +410,9 @@ curl http://localhost:8080/health
 - Semantic formatting for GPT context
 
 ### memory_store.py (Persistence)
-- SQLite async wrapper
+- Supabase (PostgreSQL) wrapper via supabase-py
 - Phone-keyed session storage
-- Upsert logic for state + context JSON
+- Upsert logic for state + context JSONB
 
 ### monday_service.py (CRM - V2)
 - GraphQL mutations for lead creation/update
@@ -457,7 +458,7 @@ Deployed on **Render** PaaS:
 - Port: 8080
 - Dockerfile at repo root
 - Environment variables configured in Render dashboard
-- SQLite database persisted in `/app/tono-bot/db/`
+- Session data persisted in Supabase (PostgreSQL, external)
 - **Docker hardening**:
   - Non-root user (`appuser`) — limits blast radius if container is compromised
   - `HEALTHCHECK` against `/health` (30s interval, 5s timeout, 10s start period)
