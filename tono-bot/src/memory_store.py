@@ -1,59 +1,77 @@
-import aiosqlite
-from datetime import datetime
-from typing import Optional, Dict, Any
 import json
+import logging
 import os
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 
-DB_PATH = os.getenv("SQLITE_PATH", "/app/tono-bot/db/memory.db")
+from supabase import create_client, Client
+
+logger = logging.getLogger("BotTractos")
+
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+
 
 class MemoryStore:
-    def __init__(self, path: str = DB_PATH):
-        self.path = path
-        self._conn: Optional[aiosqlite.Connection] = None
+    """Session persistence backed by Supabase (PostgreSQL).
+
+    Drop-in replacement for the previous SQLite-based store.
+    Same public interface: init(), get(), upsert(), close().
+    """
+
+    def __init__(self, url: str = SUPABASE_URL, key: str = SUPABASE_KEY):
+        self._url = url
+        self._key = key
+        self._client: Optional[Client] = None
 
     async def init(self):
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
-        self._conn = await aiosqlite.connect(self.path)
-        await self._conn.execute("""
-        CREATE TABLE IF NOT EXISTS sessions (
-            phone TEXT PRIMARY KEY,
-            state TEXT NOT NULL,
-            context_json TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-        """)
-        await self._conn.commit()
+        if not self._url or not self._key:
+            raise RuntimeError(
+                "SUPABASE_URL and SUPABASE_KEY must be set. "
+                "See CLAUDE.md for setup instructions."
+            )
+        self._client = create_client(self._url, self._key)
+        # Verify connectivity with a lightweight query
+        self._client.table("sessions").select("phone").limit(1).execute()
+        logger.info("✅ Supabase MemoryStore connected.")
 
     async def get(self, phone: str) -> Optional[Dict[str, Any]]:
-        self._conn.row_factory = aiosqlite.Row
-        cursor = await self._conn.execute(
-            "SELECT phone, state, context_json FROM sessions WHERE phone=?", (phone,)
+        resp = (
+            self._client
+            .table("sessions")
+            .select("phone, state, context_json")
+            .eq("phone", phone)
+            .limit(1)
+            .execute()
         )
-        row = await cursor.fetchone()
-        self._conn.row_factory = None
-        if not row:
+        if not resp.data:
             return None
-        data = dict(row)
-        try:
-            data["context"] = json.loads(data["context_json"] or "{}")
-        except Exception:
-            data["context"] = {}
-        return data
+        row = resp.data[0]
+        ctx = row.get("context_json") or {}
+        if isinstance(ctx, str):
+            try:
+                ctx = json.loads(ctx)
+            except Exception:
+                ctx = {}
+        return {
+            "phone": row["phone"],
+            "state": row["state"],
+            "context_json": json.dumps(ctx, ensure_ascii=False) if isinstance(ctx, dict) else ctx,
+            "context": ctx,
+        }
 
     async def upsert(self, phone: str, state: str, context: Dict[str, Any]):
-        now = datetime.utcnow().isoformat()
-        ctx_json = json.dumps(context, ensure_ascii=False)
-        await self._conn.execute("""
-        INSERT INTO sessions(phone, state, context_json, updated_at)
-        VALUES(?, ?, ?, ?)
-        ON CONFLICT(phone) DO UPDATE SET
-            state=excluded.state,
-            context_json=excluded.context_json,
-            updated_at=excluded.updated_at
-        """, (phone, state, ctx_json, now))
-        await self._conn.commit()
+        now = datetime.now(timezone.utc).isoformat()
+        self._client.table("sessions").upsert(
+            {
+                "phone": phone,
+                "state": state,
+                "context_json": context,  # Supabase JSONB accepts dicts directly
+                "updated_at": now,
+            },
+            on_conflict="phone",
+        ).execute()
 
     async def close(self):
-        if self._conn:
-            await self._conn.close()
-            self._conn = None
+        # supabase-py uses httpx internally; no explicit close needed
+        self._client = None

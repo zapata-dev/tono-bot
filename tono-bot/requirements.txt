@@ -5,8 +5,8 @@ python-multipart==0.0.9
 # HTTP clients
 httpx==0.27.2
 
-# Async SQLite
-aiosqlite==0.20.0
+# Supabase (PostgreSQL persistence)
+supabase==2.13.0
 
 # OpenAI SDK (usa v1.x)
 openai==1.59.7
