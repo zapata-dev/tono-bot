@@ -214,11 +214,13 @@ async def lifespan(app: FastAPI):
         logger.error(f"⚠️ Error cargando campañas iniciales: {e}")
 
     # C) Memoria
-    bot_state.store = MemoryStore()
+    _store = MemoryStore()
     try:
-        await bot_state.store.init()
+        await _store.init()
+        bot_state.store = _store
         logger.info("✅ MemoryStore inicializado.")
     except Exception as e:
+        bot_state.store = None
         logger.error(f"⚠️ Error iniciando MemoryStore: {e}")
 
     # D) Smoke test LLM: diagnóstico de red + conectividad
