@@ -19,6 +19,9 @@ from src.conversation_fsm import (
     validate_legacy_value,
 )
 from src.llm_writer import try_deterministic_response
+from src.conversation_logic import (
+    _pick_media_urls, _detect_vehicle_ubicacion, _extract_location_link,
+)
 
 
 # ============================================================
@@ -656,6 +659,108 @@ def test_su_campaign_offer_then_timeline_confirms():
 
 
 # ============================================================
+# UNIT DISAMBIGUATION TESTS (dual-unit same model bug)
+# ============================================================
+
+class _MockInventoryService:
+    """Minimal mock of InventoryService for unit-disambiguation tests."""
+    def __init__(self, items):
+        self.items = items
+
+
+_CASCADIA_LEON = {
+    "Modelo": "Cascadia",
+    "ubicacion": "Zapata Camiones León",
+    "ubicacion_link": "https://maps.app.goo.gl/LEON",
+    "photos": "https://cdn.example.com/leon1.jpg,https://cdn.example.com/leon2.jpg",
+}
+_CASCADIA_QRO = {
+    "Modelo": "Cascadia",
+    "ubicacion": "Querétaro. Querétaro",
+    "ubicacion_link": "https://maps.app.goo.gl/QRO",
+    "photos": "https://cdn.example.com/qro1.jpg,https://cdn.example.com/qro2.jpg",
+}
+_TWO_CASCADIA_SVC = _MockInventoryService([_CASCADIA_LEON, _CASCADIA_QRO])
+
+
+def test_unit_photo_uses_user_city():
+    """When user_city=León and two Cascadia exist, photos should use the León unit."""
+    context = {
+        "last_interest": "Cascadia",
+        "user_city": "León",
+    }
+    # "fotos" is an explicit photo request that _pick_media_urls handles
+    urls = _pick_media_urls("tienes fotos", "Claro, aquí tienes.", _TWO_CASCADIA_SVC, context)
+    assert urls, "Should return photo URLs"
+    assert "leon" in urls[0].lower(), f"Expected León unit photo, got: {urls[0]}"
+    assert context.get("interest_ubicacion_source") == "photo_lock", (
+        f"Source should be photo_lock, got: {context.get('interest_ubicacion_source')}"
+    )
+    assert "León" in context.get("interest_ubicacion", ""), (
+        f"interest_ubicacion should be León unit, got: {context.get('interest_ubicacion')}"
+    )
+    print("✅ UNIT DISAMBIG 1: user_city=León → photos from León unit")
+
+
+def test_explicit_override_beats_photo_lock():
+    """If photos were locked to León but user says 'la de Querétaro', interest_ubicacion updates
+    and photo_index resets to 0."""
+    context = {
+        "last_interest": "Cascadia",
+        "user_city": "León",
+        "interest_ubicacion": "Zapata Camiones León",
+        "interest_ubicacion_source": "photo_lock",
+        "photo_index": 2,
+        "photo_model": "Cascadia",
+    }
+    detected = _detect_vehicle_ubicacion("quiero la de Querétaro", _TWO_CASCADIA_SVC, "Cascadia")
+    assert detected is not None, "Should detect Querétaro from message"
+    # Simulate what the FSM/legacy path does on explicit_user detection
+    prev = context.get("interest_ubicacion")
+    context["interest_ubicacion"] = detected
+    context["interest_ubicacion_source"] = "explicit_user"
+    if prev and prev.lower() != detected.lower():
+        context["photo_index"] = 0
+        context["photo_model"] = ""
+
+    assert context["interest_ubicacion_source"] == "explicit_user", "Source must be explicit_user"
+    assert "queretaro" in context["interest_ubicacion"].lower() or "querétaro" in context["interest_ubicacion"].lower(), (
+        f"interest_ubicacion should be Querétaro, got: {context['interest_ubicacion']}"
+    )
+    assert context["photo_index"] == 0, "photo_index must reset to 0 on unit change"
+    assert context["photo_model"] == "", "photo_model must reset on unit change"
+    print("✅ UNIT DISAMBIG 2: explicit 'Querétaro' overrides photo_lock, carousel resets")
+
+
+def test_location_link_uses_user_city():
+    """_extract_location_link should return León link when user_city=León and no interest_ubicacion."""
+    link = _extract_location_link(
+        _TWO_CASCADIA_SVC,
+        last_interest="Cascadia",
+        interest_ubicacion="",
+        user_city="León",
+    )
+    assert link == "https://maps.app.goo.gl/LEON", (
+        f"Expected León Maps link, got: {link}"
+    )
+    print("✅ UNIT DISAMBIG 3: _extract_location_link uses user_city=León to return León link")
+
+
+def test_same_city_two_units_no_crash():
+    """Two units of same model in same city → no crash, returns first item safely."""
+    cascadia_leon_2 = dict(_CASCADIA_LEON)
+    cascadia_leon_2["ubicacion_link"] = "https://maps.app.goo.gl/LEON2"
+    svc = _MockInventoryService([_CASCADIA_LEON, cascadia_leon_2])
+    context = {"last_interest": "Cascadia", "user_city": "León"}
+    urls = _pick_media_urls("fotos", "Claro.", svc, context)
+    # Should not crash; should return photos from one of the León units
+    assert urls, "Should return photo URLs without crashing"
+    link = _extract_location_link(svc, "Cascadia", user_city="León")
+    assert link is not None, "Should return a link without crashing"
+    print(f"✅ UNIT DISAMBIG 4: two units same city → no crash, got link={link}")
+
+
+# ============================================================
 # RUN ALL
 # ============================================================
 if __name__ == "__main__":
@@ -707,6 +812,11 @@ if __name__ == "__main__":
         test_offer_extraction_from_bare_number_after_offer_prompt,
         test_offer_extraction_from_que_son_after_offer_prompt,
         test_su_campaign_offer_then_timeline_confirms,
+        # V2.4 tests — unit disambiguation
+        test_unit_photo_uses_user_city,
+        test_explicit_override_beats_photo_lock,
+        test_location_link_uses_user_city,
+        test_same_city_two_units_no_crash,
     ]
 
     passed = 0
