@@ -761,6 +761,75 @@ def test_same_city_two_units_no_crash():
 
 
 # ============================================================
+# V2.5 REGRESSION TESTS — Gonzalo conversation fixes
+# ============================================================
+
+def test_fraude_is_trust_concern():
+    """'Me suena a fraude' must trigger TRUST_CONCERN, not PROVIDE_DATA."""
+    from src.conversation_fsm import Slots
+    slots = Slots(phone="5214422262154", interest="Cascadia")
+    intent = classify_intent(
+        "Me suena a fraude",
+        slots,
+        current_state=ConversationState.CAMPAIGN_ENTRY,
+        has_campaign=True,
+    )
+    assert intent == Intent.TRUST_CONCERN, f"Expected TRUST_CONCERN, got {intent}"
+    print("✅ GONZALO FIX 1: 'me suena a fraude' → TRUST_CONCERN")
+
+
+def test_gobernacion_not_city():
+    """'Tienen algún permiso de gobernación?' must NOT extract city."""
+    entities = extract_entities_for_fsm(
+        "Tienen algún permiso de gobernación o algo?",
+        history="A: Listo, registrado. ¿Cuál es tu correo electrónico?",
+        context={"phone": "5214422262154"},
+    )
+    city = entities.get("city")
+    assert city is None, f"Expected city=None, got city={city!r}"
+    print("✅ GONZALO FIX 2: 'gobernación' question → city NOT extracted")
+
+
+def test_ya_te_lo_pase_not_name():
+    """'Ya te lo pasé' after bot asked for name must NOT be stored as name."""
+    entities = extract_entities_for_fsm(
+        "Ya te lo pasé",
+        history="A: Para registrarte, ¿me das tu nombre completo?",
+        context={"phone": "5214422262154"},
+    )
+    name = entities.get("name")
+    assert name is None, f"Expected name=None, got name={name!r}"
+    print("✅ GONZALO FIX 3: 'Ya te lo pasé' → name NOT extracted")
+
+
+def test_puja_question_not_city_or_timeline():
+    """'podría subir mi oferta de último momento como en una puja?' must not extract city or timeline."""
+    msg = "Pero si me falta poco para ganar podría subir mi oferta de último momento como en una puja?"
+    entities = extract_entities_for_fsm(
+        msg,
+        history="A: ¿Me compartes tu tiempo estimado para liquidar?",
+        context={"phone": "5214422262154"},
+    )
+    city = entities.get("city")
+    timeline = entities.get("timeline")
+    assert city is None, f"Expected city=None, got city={city!r}"
+    assert timeline is None, f"Expected timeline=None, got timeline={timeline!r}"
+    print("✅ GONZALO FIX 4: puja question → city and timeline NOT extracted")
+
+
+def test_primero_quiero_ir_not_timeline():
+    """'Primero quiero ir a verlo' after bot asked for timeline must NOT be stored as timeline."""
+    entities = extract_entities_for_fsm(
+        "Primero quiero ir a verlo",
+        history="A: ¿Me compartes tu tiempo estimado para liquidar?",
+        context={"phone": "5214422269526"},
+    )
+    timeline = entities.get("timeline")
+    assert timeline is None, f"Expected timeline=None, got timeline={timeline!r}"
+    print("✅ GONZALO FIX 5: 'Primero quiero ir a verlo' → timeline NOT extracted")
+
+
+# ============================================================
 # RUN ALL
 # ============================================================
 if __name__ == "__main__":
@@ -817,6 +886,12 @@ if __name__ == "__main__":
         test_explicit_override_beats_photo_lock,
         test_location_link_uses_user_city,
         test_same_city_two_units_no_crash,
+        # V2.5 tests — Gonzalo conversation regression fixes
+        test_fraude_is_trust_concern,
+        test_gobernacion_not_city,
+        test_ya_te_lo_pase_not_name,
+        test_puja_question_not_city_or_timeline,
+        test_primero_quiero_ir_not_timeline,
     ]
 
     passed = 0
