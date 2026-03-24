@@ -250,18 +250,18 @@ def build_writer_prompt(
     # Form-based campaign: when action is PRESENT_CAMPAIGN, include the form link
     if meta.get("form_url") and action == Action.PRESENT_CAMPAIGN:
         parts.append(
-            f"\nIMPORTANTE — REGISTRO VÍA FORMULARIO:\n"
-            f"Esta campaña usa un formulario externo para el registro. "
-            f"Al presentar la campaña, incluye este link de forma natural:\n"
-            f"{meta['form_url']}\n"
-            f"Ejemplo: 'Para registrar tu propuesta, llena el formulario aquí: {meta['form_url']}'"
+            f"\nOBLIGATORIO — LINK DE REGISTRO (incluir siempre):\n"
+            f"Esta campaña registra propuestas vía formulario externo. "
+            f"Presenta la dinámica brevemente (1 oración) y cierra TU MENSAJE con esta línea exacta:\n"
+            f"Para registrar tu propuesta: {meta['form_url']}\n"
+            f"NO hagas preguntas de seguimiento. El link es todo lo que necesitan."
         )
 
     # Form-based campaign: when answering a side question, remind client of form at the end
     if meta.get("form_url") and action == Action.ANSWER_QUESTION and meta.get("is_side_question"):
         parts.append(
-            f"\nAL FINAL DE TU RESPUESTA: recuerda al cliente que puede registrar su propuesta en:\n"
-            f"{meta['form_url']}"
+            f"\nOBLIGATORIO — INCLUYE ESTA LÍNEA AL FINAL DE TU RESPUESTA (textual):\n"
+            f"Para registrar tu propuesta: {meta['form_url']}"
         )
 
     # Sandwich: answer side question AND ask for next missing slot in one message
