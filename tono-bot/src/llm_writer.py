@@ -226,6 +226,19 @@ def build_writer_prompt(
 
     parts.append(action_prompt)
 
+    # Trust concern: inject credibility guidance so LLM addresses the objection
+    if meta.get("is_trust_concern"):
+        parts.append(
+            "\nCONTEXTO ESPECIAL — OBJECIÓN DE CONFIANZA:\n"
+            "El cliente expresó dudas sobre la legitimidad del proceso (fraude, permiso, garantías, etc.).\n"
+            "Responde PRIMERO la objeción de forma directa y tranquilizadora:\n"
+            "- Tractos y Max es una empresa establecida que emite factura original.\n"
+            "- La unidad tiene garantía de fábrica vigente en todo México.\n"
+            "- Opera de forma transparente: precio visible, proceso claro, sin intermediarios.\n"
+            "NO sigas pidiendo datos hasta que el cliente muestre apertura.\n"
+            "Si la duda persiste, ofrece conectarlo con un asesor humano."
+        )
+
     # When an offer was just provided, add validation guidance
     if acknowledged_data.get("offer_amount") and campaign_instructions:
         parts.append(
@@ -304,9 +317,25 @@ _DETERMINISTIC_TEMPLATES: Dict[Action, List[str]] = {
 # Templates with acknowledged data: "{ack}" is replaced with what was given
 _ACK_TEMPLATES: List[str] = [
     "Perfecto, anotado. ¿Me compartes tu {slot_label}?",
-    "Listo, registrado. ¿Cuál es tu {slot_label}?",
+    "Entendido. ¿Me podrías dar tu {slot_label}?",
     "Muy bien. ¿Me das tu {slot_label}, por favor?",
 ]
+
+
+def _is_duplicate_response(response: str, last_msgs: List[str]) -> bool:
+    """Check if a response is a near-duplicate of recent bot messages using Jaccard similarity."""
+    if not response or not last_msgs:
+        return False
+    response_tokens = set(response.lower().split())
+    if len(response_tokens) < 3:
+        return False
+    for prev in last_msgs:
+        prev_tokens = set(prev.lower().split())
+        if prev_tokens:
+            union = response_tokens | prev_tokens
+            if union and len(response_tokens & prev_tokens) / len(union) >= 0.75:
+                return True
+    return False
 
 
 def try_deterministic_response(
@@ -323,6 +352,7 @@ def try_deterministic_response(
 
     Uses stable hash-based rotation (not random) for reproducibility.
     Avoids repeating the last bot message.
+    Falls back to None (LLM) if the deterministic response is a duplicate.
     """
     meta = meta or {}
     last_msgs = [m.lower() for m in (last_bot_messages or [])]
@@ -337,7 +367,10 @@ def try_deterministic_response(
         next_slot = meta.get("next_slot", "")
         slot_label = _SLOT_LABELS.get(next_slot, next_slot)
         candidates = [t.replace("{slot_label}", slot_label) for t in _ACK_TEMPLATES]
-        return _pick_non_repeat(candidates, last_msgs, action.value, turn_count, jid)
+        response = _pick_non_repeat(candidates, last_msgs, action.value, turn_count, jid)
+        if _is_duplicate_response(response, last_msgs):
+            return None  # All ACK variants are duplicates → let LLM generate fresh
+        return response
 
     # CONFIRM_REGISTRATION: deterministic
     if action == Action.CONFIRM_REGISTRATION:
@@ -346,7 +379,10 @@ def try_deterministic_response(
     # Simple deterministic actions
     templates = _DETERMINISTIC_TEMPLATES.get(action)
     if templates:
-        return _pick_non_repeat(templates, last_msgs, action.value, turn_count, jid)
+        response = _pick_non_repeat(templates, last_msgs, action.value, turn_count, jid)
+        if _is_duplicate_response(response, last_msgs):
+            return None  # Duplicate → let LLM rephrase
+        return response
 
     return None
 

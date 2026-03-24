@@ -52,6 +52,7 @@ class Intent(str, Enum):
     MODEL_SWITCH = "model_switch"       # Wants a different model
     WAIT = "wait"                       # "déjame ver", "luego"
     DISINTEREST = "disinterest"         # "no me interesa", "ya no"
+    TRUST_CONCERN = "trust_concern"     # "me suena a fraude", "tienen permiso?"
     UNKNOWN = "unknown"
 
 
@@ -225,6 +226,8 @@ _CITY_NOISE = {
     "calidad", "baratos", "barato", "nuevo", "nuevos", "usado", "usados",
     "mejor", "grande", "chico", "bueno", "buenos", "bonito",
     "padrino", "jefe", "amigo", "compa",
+    "gobernación", "gobernacion", "momento", "puja", "ofrecer", "entender",
+    "fraude", "estafa", "permiso", "como", "ultimo", "último",
 }
 
 _CITY_PATTERNS = [
@@ -283,6 +286,7 @@ _NAME_BAD_WORDS = {
     "credito", "crédito", "contado", "financiamiento",
     "quiero", "necesito", "busco", "tengo", "puedo", "estoy",
     "es", "eso", "ese", "esa", "este", "esta", "eh", "ah",
+    "ya", "pasé", "pase", "arriba", "anterior", "antes",
 }
 
 _NAME_TRAILING_STOP = {
@@ -451,19 +455,20 @@ def _extract_city(
                         continue
                     return city_line
 
-    # Explicit pattern matching
-    for cp in _CITY_PATTERNS:
-        cm = re.search(cp, user_message, re.IGNORECASE)
-        if cm:
-            candidate = cm.group(1).strip()
-            if len(candidate) > 2 and candidate.lower() not in {"si", "no", "ok"}:
-                word_set = {w.rstrip("?!.,;:").lower() for w in candidate.split()}
-                if word_set & _CITY_NOISE:
-                    logger.info(f"🏙️ Ciudad descartada (ruido): {candidate}")
-                    continue
-                # Normalize: strip state/country suffixes (jalisco, mexico, etc.)
-                candidate = _normalize_city(candidate)
-                return candidate
+    # Explicit pattern matching — skip if message is a question (not providing location)
+    if "?" not in user_message and "¿" not in user_message:
+        for cp in _CITY_PATTERNS:
+            cm = re.search(cp, user_message, re.IGNORECASE)
+            if cm:
+                candidate = cm.group(1).strip()
+                if len(candidate) > 2 and candidate.lower() not in {"si", "no", "ok"}:
+                    word_set = {w.rstrip("?!.,;:").lower() for w in candidate.split()}
+                    if word_set & _CITY_NOISE:
+                        logger.info(f"🏙️ Ciudad descartada (ruido): {candidate}")
+                        continue
+                    # Normalize: strip state/country suffixes (jalisco, mexico, etc.)
+                    candidate = _normalize_city(candidate)
+                    return candidate
 
     # Multi-line fallback
     if is_multiline and history:
@@ -668,11 +673,18 @@ def _extract_timeline(text: str, history: str) -> Optional[str]:
     # If bot asked and reply is short, accept it as timeline
     # BUT reject bare deny/confirm words — those are intents, not timelines
     _timeline_reject = {"no", "si", "sí", "ok", "ya", "eh", "va", "dale", "nel", "nah", "bueno"}
+    # Words that indicate hesitation/appointment intent, NOT a time period
+    _timeline_context_reject = {
+        "primero", "antes", "ver", "verlo", "visitar", "ir",
+        "puja", "pero", "entender", "explicar", "saber",
+        "momento", "ultimo", "último", "fraude",
+    }
     if bot_asked:
         words = t.split()
-        if 1 <= len(words) <= 6 and not re.search(r'[@]', t):
+        if 1 <= len(words) <= 6 and not re.search(r'[@?¿]', t):
             if t.strip() not in _timeline_reject:
-                return t.strip()
+                if not any(w in words for w in _timeline_context_reject):
+                    return t.strip()
 
     return None
 
@@ -686,11 +698,17 @@ _CONFIRM_WORDS = {"si", "sí", "dale", "ok", "okay", "este mismo", "ese", "claro
 _DENY_WORDS = {"no", "nel", "nah", "no gracias", "no me interesa"}
 _WAIT_WORDS = {"luego", "déjame ver", "dejame ver", "después", "despues", "ocupado", "ahorita no", "más tarde", "mas tarde", "lo pienso"}
 _DISINTEREST_WORDS = {"no me interesa", "ya no", "no quiero", "no gracias ya", "dejalo", "déjalo", "olvidalo", "olvídalo"}
+_TRUST_WORDS = {
+    "fraude", "estafa", "permiso", "gobernación", "gobernacion",
+    "ilegal", "confiable", "derecho", "que me asegura", "qué me asegura",
+    "garantiza", "oficial", "legítimo", "legitimo", "autorizado", "certificado",
+    "seguro que",
+}
 _PHOTO_WORDS = {"foto", "fotos", "imagen", "imagenes", "mándame", "mandame", "envíame", "enviame", "otra foto", "más fotos"}
 _PDF_WORDS = {"ficha", "ficha técnica", "ficha tecnica", "specs", "corrida", "simulación", "simulacion"}
 _FINANCING_WORDS = {"financiamiento", "crédito", "credito", "mensualidad", "enganche", "plazo", "mensual"}
 _LOCATION_WORDS = {"ubicación", "ubicacion", "dónde", "donde", "dirección", "direccion", "mapa"}
-_APPOINTMENT_WORDS = {"cita", "visita", "ir", "agendar", "cuándo", "cuando puedo"}
+_APPOINTMENT_WORDS = {"cita", "visita", "agendar", "cuándo", "cuando puedo"}
 _INVENTORY_WORDS = {"más camiones", "mas camiones", "más tractos", "mas tractos", "más opciones", "mas opciones",
                     "otros modelos", "qué más", "que mas", "qué tienen", "que tienen", "tienen más", "tienen mas"}
 
@@ -722,6 +740,10 @@ def classify_intent(
     # Check disinterest first (strong signal)
     if any(w in msg for w in _DISINTEREST_WORDS):
         return Intent.DISINTEREST
+
+    # Check trust/fraud concern (high priority — before data extraction)
+    if any(w in msg for w in _TRUST_WORDS):
+        return Intent.TRUST_CONCERN
 
     # Check wait/pause
     if any(w in msg for w in _WAIT_WORDS):
@@ -865,8 +887,10 @@ def decide_action(
             return _ret(Action.ACKNOWLEDGE_SWITCH, ConversationState.INTEREST_DISCOVERY)
 
         if intent in (Intent.ASK_QUESTION, Intent.ASK_PRICE, Intent.ASK_FINANCING,
-                       Intent.ASK_LOCATION):
-            return _ret(Action.ANSWER_QUESTION, ConversationState.CAMPAIGN_ENTRY, {"is_side_question": True})
+                       Intent.ASK_LOCATION, Intent.ASK_APPOINTMENT, Intent.TRUST_CONCERN):
+            meta_extra: Dict[str, Any] = {"is_trust_concern": True} if intent == Intent.TRUST_CONCERN else {}
+            return _ret(Action.ANSWER_QUESTION, ConversationState.CAMPAIGN_ENTRY,
+                        {"is_side_question": True, **meta_extra})
 
         # DENY in campaign: respond commercially (destrabar), stay in campaign
         if intent == Intent.DENY:
