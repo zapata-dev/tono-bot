@@ -1016,6 +1016,11 @@ def decide_action(
     if state == ConversationState.QUALIFIED:
         if intent == Intent.ASK_PHOTOS:
             return _ret(Action.SEND_PHOTOS, ConversationState.QUALIFIED)
+        # Campaign with form: CONFIRM → send form; other intents → answer and remind link
+        if has_campaign and form_url:
+            if intent == Intent.CONFIRM:
+                return _ret(Action.SEND_FORM, ConversationState.CAMPAIGN_ENTRY, {"form_url": form_url})
+            return _ret(Action.ANSWER_QUESTION, ConversationState.QUALIFIED, {"is_side_question": True, "form_url": form_url})
         return _ret(Action.ANSWER_QUESTION, ConversationState.QUALIFIED)
 
     # ---- WAITING state ----

@@ -2106,9 +2106,9 @@ async def _handle_message_fsm(
                 pass  # Keep first attempt
 
     # Post-LLM: ensure form URL is always present when required
-    _form_url = meta.get("form_url", "")
+    _form_url = meta.get("form_url") or (campaign.form_url if campaign else "")
     if _form_url and reply_clean and _form_url not in reply_clean:
-        if action in (Action.PRESENT_CAMPAIGN, Action.ANSWER_QUESTION):
+        if action not in (Action.SEND_FORM, Action.CONFIRM_REGISTRATION):
             reply_clean = reply_clean + f"\nPara registrar tu propuesta: {_form_url}"
             logger.info(f"📋 Form URL appended to {action.value} response")
 
