@@ -2017,6 +2017,7 @@ async def _handle_message_fsm(
         has_campaign=has_campaign,
         turn_count=turn_count,
         campaign_type=campaign_type,
+        form_url=campaign.form_url if campaign else "",
     )
 
     # Build last bot messages for anti-repetition

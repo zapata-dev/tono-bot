@@ -80,6 +80,7 @@ class Action(str, Enum):
     WAIT_MODE = "wait_mode"
     ESCALATE = "escalate"
     ACKNOWLEDGE_SWITCH = "acknowledge_switch"  # Model switch detected
+    SEND_FORM = "send_form"                    # Campaign has a Google Form for data collection
 
 
 # ============================================================
@@ -831,6 +832,7 @@ def decide_action(
     has_campaign: bool,
     turn_count: int,
     campaign_type: str = "A",
+    form_url: str = "",
 ) -> Tuple[Action, ConversationState, Dict[str, Any]]:
     """
     Pure deterministic function. NO LLM calls.
@@ -870,7 +872,10 @@ def decide_action(
     # ---- GREETING state ----
     if state == ConversationState.GREETING:
         if has_campaign:
-            return _ret(Action.PRESENT_CAMPAIGN, ConversationState.CAMPAIGN_ENTRY)
+            extra: Dict[str, Any] = {}
+            if form_url:
+                extra["form_url"] = form_url
+            return _ret(Action.PRESENT_CAMPAIGN, ConversationState.CAMPAIGN_ENTRY, extra or None)
         else:
             return _ret(Action.GREET, ConversationState.INTEREST_DISCOVERY)
 
@@ -889,9 +894,12 @@ def decide_action(
         if intent in (Intent.ASK_QUESTION, Intent.ASK_PRICE, Intent.ASK_FINANCING,
                        Intent.ASK_LOCATION, Intent.ASK_APPOINTMENT, Intent.TRUST_CONCERN):
             meta_extra: Dict[str, Any] = {"is_trust_concern": True} if intent == Intent.TRUST_CONCERN else {}
-            # Sandwich: after answering, naturally ask for next missing slot
-            # (except trust concerns — give the client space to settle doubts first)
-            if intent != Intent.TRUST_CONCERN:
+            if form_url:
+                # With a form, mention the link after answering instead of asking for the next slot
+                meta_extra["form_url"] = form_url
+            elif intent != Intent.TRUST_CONCERN:
+                # Sandwich: after answering, naturally ask for next missing slot
+                # (except trust concerns — give the client space to settle doubts first)
                 _missing = _get_campaign_missing(slots, campaign_type)
                 if _missing:
                     meta_extra["sandwich_next"] = _missing[0]
@@ -901,6 +909,10 @@ def decide_action(
         # DENY in campaign: respond commercially (destrabar), stay in campaign
         if intent == Intent.DENY:
             return _ret(Action.SOFT_DENY, ConversationState.CAMPAIGN_ENTRY)
+
+        # --- Form-based registration: skip all slot collection ---
+        if form_url:
+            return _ret(Action.SEND_FORM, ConversationState.CAMPAIGN_ENTRY, {"form_url": form_url})
 
         # Check if data was provided or offer made
         if intent in (Intent.PROVIDE_DATA, Intent.MAKE_OFFER, Intent.CONFIRM):
@@ -1092,6 +1104,7 @@ def process_fsm(
     has_campaign: bool,
     turn_count: int,
     campaign_type: str = "A",
+    form_url: str = "",
 ) -> Tuple[Action, ConversationState, Slots, Dict[str, Any]]:
     """
     Main FSM entry point. Called from handle_message().
@@ -1145,6 +1158,7 @@ def process_fsm(
         has_campaign=has_campaign,
         turn_count=turn_count,
         campaign_type=campaign_type,
+        form_url=form_url,
     )
 
     # Store intent in meta so conversation_logic can use it
