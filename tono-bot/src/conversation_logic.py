@@ -418,18 +418,39 @@ def _build_financing_text() -> str:
     return "\n".join(lines)
 
 
-def _detect_pdf_request(user_message: str, last_interest: str, context: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
+def _detect_pdf_request(user_message: str, last_interest: str, context: Dict[str, Any] = None, bases_pdf_url: str = None) -> Optional[Dict[str, Any]]:
     """
-    Detecta si el usuario pide un PDF (ficha técnica o corrida).
+    Detecta si el usuario pide un PDF (ficha técnica, corrida, o bases de campaña).
     Retorna dict con: tipo, pdf_url, filename, mensaje_previo
     O None si no pide PDF.
 
     Ahora con soporte de contexto para:
     - Typos comunes ("fiche", "fixa", "corrda")
     - Peticiones genéricas ("pásamela", "mándamela") si hubo PDF previo
+    - Bases/términos y condiciones de campaña (si bases_pdf_url está disponible)
     """
     msg = (user_message or "").lower()
     context = context or {}
+
+    # === BASES / TÉRMINOS Y CONDICIONES (solo si la campaña tiene este PDF) ===
+    if bases_pdf_url:
+        bases_keywords = [
+            "bases y terminos", "bases y términos",
+            "terminos y condiciones", "términos y condiciones",
+            "bases de la campaña", "bases de la campana",
+            "bases de la dinamica", "bases de la dinámica",
+            "bases del concurso", "bases legales",
+            "terminos", "términos", "condiciones",
+            "bases",
+        ]
+        if any(k in msg for k in bases_keywords):
+            logger.info(f"📄 Bases/T&C solicitadas para campaña")
+            return {
+                "tipo": "bases",
+                "pdf_url": bases_pdf_url,
+                "filename": "Bases_y_Terminos_Condiciones.pdf",
+                "mensaje": "Aquí tienes las bases y términos y condiciones de la dinámica.",
+            }
 
     # === VERBOS DE ACCIÓN (indican que quieren RECIBIR algo, no solo preguntar) ===
     action_verbs = [
@@ -1715,7 +1736,8 @@ def _pick_media_urls(
         context["photo_model"] = target_model_name
 
     # 7) Determinar si quiere "otra" (1 foto) o "fotos" (grupo)
-    wants_next = any(k in msg for k in ["otra", "mas", "más", "siguiente"])
+    # "otra"/"siguiente" → modo carrusel (1 foto); "mas fotos" → batch
+    wants_next = any(k in msg for k in ["otra", "siguiente"])
     selected_urls: List[str] = []
 
     if wants_next:
@@ -2106,7 +2128,7 @@ async def _handle_message_fsm(
                 pass  # Keep first attempt
 
     # Post-LLM: ensure form URL is always present when required
-    _form_url = meta.get("form_url") or (campaign.form_url if campaign else "")
+    _form_url = meta.get("form_url")  # Only use explicitly-passed form_url (not campaign default) to avoid repeating link
     if _form_url and reply_clean and _form_url not in reply_clean:
         if action not in (Action.SEND_FORM, Action.CONFIRM_REGISTRATION, Action.SEND_PHOTOS, Action.SEND_PDF):
             reply_clean = reply_clean + f"\nPara registrar tu propuesta: {_form_url}"
@@ -2179,7 +2201,8 @@ async def _handle_message_fsm(
         media_urls = _pick_media_urls(user_message, reply_clean, inventory_service, new_context)
 
     # PDF detection
-    pdf_info = _detect_pdf_request(user_message, slots.interest or "", new_context)
+    _bases_url = campaign.bases_pdf_url if campaign else None
+    pdf_info = _detect_pdf_request(user_message, slots.interest or "", new_context, bases_pdf_url=_bases_url)
     if pdf_info and pdf_info.get("pdf_url"):
         reply_clean = pdf_info.get("mensaje", reply_clean)
         if funnel_stage in ("1er Contacto", "Intención"):
@@ -3111,7 +3134,8 @@ async def handle_message(
     # ============================================================
     # PDF DETECTION (FICHA TÉCNICA / CORRIDA)
     # ============================================================
-    pdf_info = _detect_pdf_request(user_message, last_interest, new_context)
+    _bases_url_legacy = _matched_campaign.bases_pdf_url if _matched_campaign else None
+    pdf_info = _detect_pdf_request(user_message, last_interest, new_context, bases_pdf_url=_bases_url_legacy)
     if pdf_info:
         # Guardar tipo de PDF solicitado para peticiones genéricas posteriores
         if pdf_info.get("tipo"):

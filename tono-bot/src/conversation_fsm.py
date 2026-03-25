@@ -1020,7 +1020,7 @@ def decide_action(
         if has_campaign and form_url:
             if intent == Intent.CONFIRM:
                 return _ret(Action.SEND_FORM, ConversationState.CAMPAIGN_ENTRY, {"form_url": form_url})
-            return _ret(Action.ANSWER_QUESTION, ConversationState.QUALIFIED, {"is_side_question": True, "form_url": form_url})
+            return _ret(Action.ANSWER_QUESTION, ConversationState.QUALIFIED, {"is_side_question": True})
         return _ret(Action.ANSWER_QUESTION, ConversationState.QUALIFIED)
 
     # ---- WAITING state ----

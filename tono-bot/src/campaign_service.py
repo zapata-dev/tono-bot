@@ -24,23 +24,30 @@ _EXPECTED_COLUMNS = {"activa", "tracking id", "keywords", "campaña", "campana",
 
 def _extract_form_url(instructions: str) -> tuple:
     """
-    Extracts an optional FORM_URL line from instructions text.
-    Returns (form_url, cleaned_instructions).
+    Extracts optional FORM_URL and BASES_PDF_URL lines from instructions text.
+    Returns (form_url, bases_pdf_url, cleaned_instructions).
 
-    The line format is:  FORM_URL: https://...
-    The line is stripped from instructions so it doesn't reach the LLM prompt.
+    Line formats:
+      FORM_URL: https://...
+      BASES_PDF_URL: https://...
+    Both lines are stripped from instructions so they don't reach the LLM prompt.
     """
     import re as _re
     form_url = ""
+    bases_pdf_url = ""
     lines = instructions.splitlines()
     kept = []
     for line in lines:
         m = _re.match(r'^\s*FORM_URL\s*:\s*(https?://\S+)\s*$', line, _re.IGNORECASE)
         if m:
             form_url = m.group(1).strip()
-        else:
-            kept.append(line)
-    return form_url, "\n".join(kept).strip()
+            continue
+        m2 = _re.match(r'^\s*BASES(?:_PDF)?_URL\s*:\s*(https?://\S+)\s*$', line, _re.IGNORECASE)
+        if m2:
+            bases_pdf_url = m2.group(1).strip()
+            continue
+        kept.append(line)
+    return form_url, bases_pdf_url, "\n".join(kept).strip()
 
 
 class Campaign:
@@ -56,9 +63,9 @@ class Campaign:
         ]
         self.name = (row.get("Campaña", row.get("Campana", "")) or "").strip()
         raw_instructions = (row.get("Instrucciones", "") or "").strip()
-        # Extract optional FORM_URL line: "FORM_URL: https://..."
+        # Extract optional FORM_URL and BASES_PDF_URL lines.
         # Stripped from instructions so the LLM doesn't get confused.
-        self.form_url, self.instructions = _extract_form_url(raw_instructions)
+        self.form_url, self.bases_pdf_url, self.instructions = _extract_form_url(raw_instructions)
 
     def is_valid(self) -> bool:
         """Una campaña es válida si está activa y tiene instrucciones."""
