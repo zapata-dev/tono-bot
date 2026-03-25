@@ -1023,6 +1023,11 @@ def decide_action(
 
     # ---- QUALIFIED state (keep answering questions) ----
     if state == ConversationState.QUALIFIED:
+        if intent == Intent.GREETING:
+            # Re-engaging customer: greet properly before continuing flow
+            if has_campaign:
+                return _ret(Action.GREET, ConversationState.CAMPAIGN_ENTRY)
+            return _ret(Action.GREET, ConversationState.INTEREST_DISCOVERY)
         if intent == Intent.ASK_PHOTOS:
             return _ret(Action.SEND_PHOTOS, ConversationState.QUALIFIED)
         # Campaign with form: CONFIRM → send form; other intents → answer and remind link

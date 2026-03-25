@@ -1541,6 +1541,7 @@ def _pick_media_urls(
     reply: str,
     inventory_service,
     context: Dict[str, Any],
+    fsm_requested: bool = False,
 ) -> List[str]:
     """
     Devuelve lista de URLs de fotos según el modelo detectado.
@@ -1580,7 +1581,7 @@ def _pick_media_urls(
     explicit_request = any(re.search(p, msg) for p in explicit_photo_patterns) and not singular_photo_question
     context_request = current_photo_model and any(k in msg for k in context_photo_keywords)
 
-    if not explicit_request and not context_request:
+    if not fsm_requested and not explicit_request and not context_request:
         return []
 
     # 3) Recuperar memoria del contexto
@@ -2198,7 +2199,7 @@ async def _handle_message_fsm(
     # Photo selection (reuse existing logic)
     media_urls: List[str] = []
     if action == Action.SEND_PHOTOS:
-        media_urls = _pick_media_urls(user_message, reply_clean, inventory_service, new_context)
+        media_urls = _pick_media_urls(user_message, reply_clean, inventory_service, new_context, fsm_requested=True)
 
     # PDF detection
     _bases_url = campaign.bases_pdf_url if campaign else None
