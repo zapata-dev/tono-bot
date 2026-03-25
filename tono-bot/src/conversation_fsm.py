@@ -705,7 +705,13 @@ _TRUST_WORDS = {
     "garantiza", "oficial", "legítimo", "legitimo", "autorizado", "certificado",
     "seguro que",
 }
-_PHOTO_WORDS = {"foto", "fotos", "imagen", "imagenes", "mándame", "mandame", "envíame", "enviame", "otra foto", "más fotos"}
+_PHOTO_WORDS = {
+    "foto", "fotos", "imagen", "imagenes", "imágenes",
+    "mándame", "mandame", "envíame", "enviame", "otra foto", "más fotos",
+    # "ver la unidad" / "quiero verla" patterns
+    "ver la unidad", "ver el camion", "ver el camión", "ver el tracto",
+    "verla", "verlo", "muéstrame", "muestrame", "mostrame", "ver la camioneta",
+}
 _PDF_WORDS = {"ficha", "ficha técnica", "ficha tecnica", "specs", "corrida", "simulación", "simulacion"}
 _FINANCING_WORDS = {"financiamiento", "crédito", "credito", "mensualidad", "enganche", "plazo", "mensual"}
 _LOCATION_WORDS = {"ubicación", "ubicacion", "dónde", "donde", "dirección", "direccion", "mapa"}
