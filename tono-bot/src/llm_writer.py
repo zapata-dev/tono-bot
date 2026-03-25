@@ -107,7 +107,10 @@ _ACTION_PROMPTS: Dict[Action, str] = {
 
     Action.SEND_PHOTOS: (
         "ACCIÓN: Confirma que envías fotos.\n"
-        "Responde: 'Claro, aquí tienes.' (el sistema adjunta las fotos automáticamente)"
+        "Responde: 'Claro, aquí tienes.' (el sistema adjunta las fotos automáticamente)\n"
+        "Si suggest_visit=True en el contexto: después de confirmar las fotos, añade en la misma respuesta "
+        "una invitación breve a agendar una visita presencial. Ej: 'Claro, aquí tienes las fotos. "
+        "Si quieres verla en persona, con gusto te ayudo a agendar una visita.'"
     ),
 
     Action.SEND_PDF: (
@@ -262,6 +265,14 @@ def build_writer_prompt(
         parts.append(
             f"\nOBLIGATORIO — INCLUYE ESTA LÍNEA AL FINAL DE TU RESPUESTA (textual):\n"
             f"Para registrar tu propuesta: {meta['form_url']}"
+        )
+
+    # When sending photos in campaign context, suggest scheduling an in-person visit
+    if meta.get("suggest_visit") and action == Action.SEND_PHOTOS:
+        parts.append(
+            "\nADEMÁS DE CONFIRMAR LAS FOTOS: en la misma respuesta, invita al cliente a agendar "
+            "una visita presencial para ver la unidad en persona. Sé breve y natural. "
+            "Ejemplo: 'Claro, aquí tienes las fotos. Si quieres verla en persona, con gusto te ayudo a agendar una visita.'"
         )
 
     # Sandwich: answer side question AND ask for next missing slot in one message
@@ -422,6 +433,9 @@ def try_deterministic_response(
     # Simple deterministic actions
     templates = _DETERMINISTIC_TEMPLATES.get(action)
     if templates:
+        # If suggest_visit is set, skip deterministic so LLM can include the visit suggestion
+        if meta.get("suggest_visit"):
+            return None
         response = _pick_non_repeat(templates, last_msgs, action.value, turn_count, jid)
         if _is_duplicate_response(response, last_msgs):
             return None  # Duplicate → let LLM rephrase

@@ -705,7 +705,13 @@ _TRUST_WORDS = {
     "garantiza", "oficial", "legítimo", "legitimo", "autorizado", "certificado",
     "seguro que",
 }
-_PHOTO_WORDS = {"foto", "fotos", "imagen", "imagenes", "mándame", "mandame", "envíame", "enviame", "otra foto", "más fotos"}
+_PHOTO_WORDS = {
+    "foto", "fotos", "imagen", "imagenes", "imágenes",
+    "mándame", "mandame", "envíame", "enviame", "otra foto", "más fotos",
+    # "ver la unidad" / "quiero verla" patterns
+    "ver la unidad", "ver el camion", "ver el camión", "ver el tracto",
+    "verla", "verlo", "muéstrame", "muestrame", "mostrame", "ver la camioneta",
+}
 _PDF_WORDS = {"ficha", "ficha técnica", "ficha tecnica", "specs", "corrida", "simulación", "simulacion"}
 _FINANCING_WORDS = {"financiamiento", "crédito", "credito", "mensualidad", "enganche", "plazo", "mensual"}
 _LOCATION_WORDS = {"ubicación", "ubicacion", "dónde", "donde", "dirección", "direccion", "mapa"}
@@ -881,9 +887,11 @@ def decide_action(
 
     # ---- CAMPAIGN_ENTRY state ----
     if state == ConversationState.CAMPAIGN_ENTRY:
-        if intent in (Intent.ASK_PHOTOS, Intent.ASK_PDF):
-            action = Action.SEND_PHOTOS if intent == Intent.ASK_PHOTOS else Action.SEND_PDF
-            return _ret(action, ConversationState.CAMPAIGN_ENTRY)
+        if intent == Intent.ASK_PHOTOS:
+            # Send photos AND suggest scheduling a visit to see the unit in person
+            return _ret(Action.SEND_PHOTOS, ConversationState.CAMPAIGN_ENTRY, {"suggest_visit": True})
+        if intent == Intent.ASK_PDF:
+            return _ret(Action.SEND_PDF, ConversationState.CAMPAIGN_ENTRY)
 
         if intent == Intent.ASK_INVENTORY:
             return _ret(Action.SHOW_INVENTORY, ConversationState.CATALOG_BROWSING, {"is_side_question": True})
@@ -891,15 +899,16 @@ def decide_action(
         if intent == Intent.MODEL_SWITCH:
             return _ret(Action.ACKNOWLEDGE_SWITCH, ConversationState.INTEREST_DISCOVERY)
 
+        # Appointment: actually schedule it, don't just answer as a side question
+        if intent == Intent.ASK_APPOINTMENT:
+            return _ret(Action.ASK_APPOINTMENT, ConversationState.APPOINTMENT_SCHEDULING)
+
         if intent in (Intent.ASK_QUESTION, Intent.ASK_PRICE, Intent.ASK_FINANCING,
-                       Intent.ASK_LOCATION, Intent.ASK_APPOINTMENT, Intent.TRUST_CONCERN):
+                       Intent.ASK_LOCATION, Intent.TRUST_CONCERN):
             meta_extra: Dict[str, Any] = {"is_trust_concern": True} if intent == Intent.TRUST_CONCERN else {}
-            if form_url:
-                # With a form, mention the link after answering instead of asking for the next slot
-                meta_extra["form_url"] = form_url
-            elif intent != Intent.TRUST_CONCERN:
-                # Sandwich: after answering, naturally ask for next missing slot
-                # (except trust concerns — give the client space to settle doubts first)
+            # Do NOT re-send form_url — it was already shown in PRESENT_CAMPAIGN.
+            # Use sandwich instead: answer the question, then naturally ask for next missing slot.
+            if intent != Intent.TRUST_CONCERN:
                 _missing = _get_campaign_missing(slots, campaign_type)
                 if _missing:
                     meta_extra["sandwich_next"] = _missing[0]
