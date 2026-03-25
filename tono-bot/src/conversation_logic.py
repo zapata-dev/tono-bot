@@ -418,7 +418,7 @@ def _build_financing_text() -> str:
     return "\n".join(lines)
 
 
-def _detect_pdf_request(user_message: str, last_interest: str, context: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
+def _detect_pdf_request(user_message: str, last_interest: str, context: Dict[str, Any] = None, bases_url: str = "") -> Optional[Dict[str, Any]]:
     """
     Detecta si el usuario pide un PDF (ficha técnica o corrida).
     Retorna dict con: tipo, pdf_url, filename, mensaje_previo
@@ -493,6 +493,23 @@ def _detect_pdf_request(user_message: str, last_interest: str, context: Dict[str
             if last_pdf_type and has_action_verb:
                 pdf_type = last_pdf_type
                 logger.info(f"📄 Petición genérica '{msg}' continuando PDF previo: {pdf_type}")
+
+    # 4) Bases / términos y condiciones de campaña
+    if not pdf_type and bases_url:
+        bases_keywords = [
+            "bases", "terminos", "términos", "condiciones", "terminos y condiciones",
+            "términos y condiciones", "bases y terminos", "bases y términos",
+            "reglamento", "como funciona", "cómo funciona", "mecanismo",
+            "reglas", "legales", "contrato",
+        ]
+        if any(k in msg for k in bases_keywords):
+            logger.info(f"📄 Solicitud de bases detectada: '{msg}'")
+            return {
+                "tipo": "bases",
+                "pdf_url": bases_url,
+                "filename": "Bases_y_Condiciones.pdf",
+                "mensaje": "Aqui te comparto las bases y terminos de la dinamica.",
+            }
 
     if not pdf_type:
         return None
@@ -2179,7 +2196,7 @@ async def _handle_message_fsm(
         media_urls = _pick_media_urls(user_message, reply_clean, inventory_service, new_context)
 
     # PDF detection
-    pdf_info = _detect_pdf_request(user_message, slots.interest or "", new_context)
+    pdf_info = _detect_pdf_request(user_message, slots.interest or "", new_context, bases_url=campaign.bases_url if campaign else "")
     if pdf_info and pdf_info.get("pdf_url"):
         reply_clean = pdf_info.get("mensaje", reply_clean)
         if funnel_stage in ("1er Contacto", "Intención"):
@@ -3109,9 +3126,9 @@ async def handle_message(
     new_context["funnel_stage"] = funnel_stage
 
     # ============================================================
-    # PDF DETECTION (FICHA TÉCNICA / CORRIDA)
+    # PDF DETECTION (FICHA TÉCNICA / CORRIDA / BASES)
     # ============================================================
-    pdf_info = _detect_pdf_request(user_message, last_interest, new_context)
+    pdf_info = _detect_pdf_request(user_message, last_interest, new_context, bases_url=(_matched_campaign.bases_url if _matched_campaign else ""))
     if pdf_info:
         # Guardar tipo de PDF solicitado para peticiones genéricas posteriores
         if pdf_info.get("tipo"):

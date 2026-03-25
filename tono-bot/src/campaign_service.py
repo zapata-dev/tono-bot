@@ -24,23 +24,27 @@ _EXPECTED_COLUMNS = {"activa", "tracking id", "keywords", "campaña", "campana",
 
 def _extract_form_url(instructions: str) -> tuple:
     """
-    Extracts an optional FORM_URL line from instructions text.
-    Returns (form_url, cleaned_instructions).
+    Extracts optional FORM_URL and BASES_URL lines from instructions text.
+    Returns (form_url, bases_url, cleaned_instructions).
 
-    The line format is:  FORM_URL: https://...
-    The line is stripped from instructions so it doesn't reach the LLM prompt.
+    The line format is:  FORM_URL: https://...  or  BASES_URL: https://...
+    Lines are stripped from instructions so they don't reach the LLM prompt.
     """
     import re as _re
     form_url = ""
+    bases_url = ""
     lines = instructions.splitlines()
     kept = []
     for line in lines:
-        m = _re.match(r'^\s*FORM_URL\s*:\s*(https?://\S+)\s*$', line, _re.IGNORECASE)
-        if m:
-            form_url = m.group(1).strip()
+        m_form = _re.match(r'^\s*FORM_URL\s*:\s*(https?://\S+)\s*$', line, _re.IGNORECASE)
+        m_bases = _re.match(r'^\s*BASES_URL\s*:\s*(https?://\S+)\s*$', line, _re.IGNORECASE)
+        if m_form:
+            form_url = m_form.group(1).strip()
+        elif m_bases:
+            bases_url = m_bases.group(1).strip()
         else:
             kept.append(line)
-    return form_url, "\n".join(kept).strip()
+    return form_url, bases_url, "\n".join(kept).strip()
 
 
 class Campaign:
@@ -56,9 +60,9 @@ class Campaign:
         ]
         self.name = (row.get("Campaña", row.get("Campana", "")) or "").strip()
         raw_instructions = (row.get("Instrucciones", "") or "").strip()
-        # Extract optional FORM_URL line: "FORM_URL: https://..."
+        # Extract optional FORM_URL and BASES_URL lines.
         # Stripped from instructions so the LLM doesn't get confused.
-        self.form_url, self.instructions = _extract_form_url(raw_instructions)
+        self.form_url, self.bases_url, self.instructions = _extract_form_url(raw_instructions)
 
     def is_valid(self) -> bool:
         """Una campaña es válida si está activa y tiene instrucciones."""
