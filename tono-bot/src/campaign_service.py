@@ -42,7 +42,7 @@ def _extract_form_url(instructions: str) -> tuple:
         if m:
             form_url = m.group(1).strip()
             continue
-        m2 = _re.match(r'^\s*BASES_PDF_URL\s*:\s*(https?://\S+)\s*$', line, _re.IGNORECASE)
+        m2 = _re.match(r'^\s*BASES(?:_PDF)?_URL\s*:\s*(https?://\S+)\s*$', line, _re.IGNORECASE)
         if m2:
             bases_pdf_url = m2.group(1).strip()
             continue
