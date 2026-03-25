@@ -9,9 +9,12 @@ import time
 import re
 import base64
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
 from urllib.parse import quote
 from collections import deque, OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
+
+import pytz
 
 import httpx
 from fastapi import FastAPI, Request
@@ -718,6 +721,17 @@ async def _process_accumulated_messages(bot_state: GlobalState, remote_jid: str)
                     clean_client = remote_jid.split("@")[0]
                     alerta = f"*HANDOFF ACTIVADO*\n\nEl chat con wa.me/{clean_client} ha sido pausado."
                     await send_evolution_message(bot_state, settings.OWNER_PHONE, alerta)
+                # Also notify the team (permanent silence — no reactivation time)
+                team = _parse_team_numbers()
+                clean_client = _clean_phone_or_jid(remote_jid)
+                for _tn in team:
+                    try:
+                        await send_evolution_message(
+                            bot_state, _tn,
+                            f"🤝 *HANDOFF MANUAL (/silencio)*\n\nChat: wa.me/{clean_client}\nBot desactivado indefinidamente.\nUsa /activar en el chat para reactivarlo."
+                        )
+                    except Exception:
+                        pass
                 return
 
             if combined_message.lower() == "/activar":
@@ -1648,6 +1662,48 @@ async def notify_owner(bot_state: GlobalState, user_number_or_jid: str, user_mes
     await send_evolution_message(bot_state, settings.OWNER_PHONE, alert_text)
 
 
+# === 9.5 NOTIFICACIÓN DE HANDOFF AL EQUIPO ===
+def _parse_team_numbers() -> List[str]:
+    """Return list of clean phone numbers from TEAM_NUMBERS setting."""
+    raw = (settings.TEAM_NUMBERS or "").strip()
+    if not raw:
+        return []
+    return [n.strip() for n in raw.split(",") if n.strip()]
+
+
+async def _notify_handoff_to_team(bot_state: GlobalState, client_jid: str) -> None:
+    """Send a handoff alert to every number in TEAM_NUMBERS.
+
+    Called when a human agent message is detected on the business WhatsApp,
+    so the team knows the bot is silenced and which chat needs attention.
+    """
+    team = _parse_team_numbers()
+    if not team:
+        return
+
+    clean_client = _clean_phone_or_jid(client_jid)
+    reactivate_min = settings.AUTO_REACTIVATE_MINUTES
+
+    tz = pytz.timezone("America/Mexico_City")
+    reactivate_at = datetime.now(tz) + timedelta(minutes=reactivate_min)
+    reactivate_str = reactivate_at.strftime("%H:%M")
+
+    alert = (
+        "🤝 *ASESOR TOMÓ CONTROL*\n\n"
+        f"Chat: wa.me/{clean_client}\n"
+        f"Bot silenciado por {reactivate_min} min.\n"
+        f"Reactivación automática: {reactivate_str} (CDMX)\n\n"
+        "_(El bot no responderá en ese chat hasta entonces)_"
+    )
+
+    for number in team:
+        try:
+            await send_evolution_message(bot_state, number, alert)
+            logger.info(f"📣 Handoff notificado a {number} (chat={clean_client})")
+        except Exception as e:
+            logger.warning(f"⚠️ No se pudo notificar handoff a {number}: {e}")
+
+
 # === 10. PROCESADOR CENTRAL ===
 async def process_single_event(bot_state: GlobalState, data: Dict[str, Any]):
     key = data.get("key", {}) or {}
@@ -1713,6 +1769,8 @@ async def process_single_event(bot_state: GlobalState, data: Dict[str, Any]):
         # 3. Si NO es del bot Y NO es automático → Es un HUMANO → SILENCIAR
         logger.info(f"🤐 HUMANO DETECTADO en {remote_jid} - silenciando bot por {settings.AUTO_REACTIVATE_MINUTES} min")
         bot_state.silenced_users[remote_jid] = time.time() + (settings.AUTO_REACTIVATE_MINUTES * 60)
+        # Notify the support team so they know the bot is silent and the chat needs attention
+        asyncio.create_task(_notify_handoff_to_team(bot_state, remote_jid))
         return
 
     # === EXTRACCIÓN DE MENSAJE (TEXTO, AUDIO O IMAGEN) ===
