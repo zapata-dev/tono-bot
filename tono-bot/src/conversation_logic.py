@@ -2566,6 +2566,63 @@ async def handle_message(
     if extracted_appt:
         _new_extracted_data["appointment"] = extracted_appt
 
+    # ============================================================
+    # UNIVERSAL FSM: Run for ALL conversations (decisions only)
+    # The FSM determines lead qualification, funnel stage, intent,
+    # and slot changes deterministically. The legacy LLM path only
+    # generates text — it never drives business decisions.
+    # ============================================================
+    _fsm_action: Optional[Action] = None
+    _fsm_new_state: Optional[ConversationState] = None
+    _fsm_slots: Optional[Slots] = None
+    _fsm_meta: Dict[str, Any] = {}
+    _merged_new_data: Dict[str, str] = dict(_new_extracted_data)  # fallback if FSM fails
+    _fsm_has_campaign = bool(_matched_campaign and getattr(_matched_campaign, 'instructions', None))
+    try:
+        _fsm_extracted = extract_entities_for_fsm(user_message, history, context)
+
+        # Merge legacy-extracted data with FSM extraction (FSM takes priority)
+        _merged_new_data: Dict[str, str] = {}
+        for k, v in _new_extracted_data.items():
+            if v:
+                _merged_new_data[k] = v
+        for k, v in _fsm_extracted.items():
+            if v:
+                _merged_new_data[k] = v
+
+        # Populate context slots so FSM can read them
+        _slot_ctx_map = {
+            "name": "user_name", "phone": "user_phone", "email": "user_email",
+            "city": "user_city", "interest": "last_interest",
+            "appointment": "last_appointment", "payment": "last_payment",
+            "offer_amount": "offer_amount",
+        }
+        for _sk, _sv in {
+            "name": saved_name, "phone": saved_phone, "email": saved_email,
+            "city": saved_city, "interest": last_interest,
+            "appointment": last_appointment, "payment": last_payment,
+            "offer_amount": extracted_offer,
+        }.items():
+            if _sv:
+                context[_slot_ctx_map[_sk]] = _sv
+
+        _campaign_type_fsm = (context.get("tracking_data") or {}).get("campaign_type", "A")
+        _fsm_action, _fsm_new_state, _fsm_slots, _fsm_meta = process_fsm(
+            user_message=user_message,
+            context=context,
+            new_data=_merged_new_data,
+            has_campaign=_fsm_has_campaign,
+            turn_count=turn_count,
+            campaign_type=_campaign_type_fsm,
+            form_url=getattr(_matched_campaign, 'form_url', '') if _matched_campaign else "",
+        )
+        logger.info(
+            f"🔀 FSM universal: action={_fsm_action.value}, state={_fsm_new_state.value}, "
+            f"intent={_fsm_meta.get('intent', '?')}, flow={_fsm_meta.get('primary_flow', '?')}"
+        )
+    except Exception as _fsm_err:
+        logger.error(f"⚠️ FSM universal falló (legacy continúa sin FSM): {_fsm_err}")
+
     # Time and date
     now_dt, current_time_str = get_mexico_time()
     # Formatear fecha en español manualmente (el servidor tiene locale inglés)
@@ -2660,25 +2717,22 @@ async def handle_message(
             logger.error(f"⚠️ Error en keyword campaign matching: {e}")
 
     # ============================================================
-    # FSM PATH: Campaign conversations use state machine
+    # FSM PATH: Campaign conversations use full FSM + LLM writer
+    # (FSM already ran universally above; this handles text gen)
     # ============================================================
     _use_fsm = _has_campaign_instructions and not _is_organic_campaign_match and tracking_id
     if _use_fsm:
         try:
-            # Use FSM's own encapsulated extraction instead of legacy
-            _fsm_extracted = extract_entities_for_fsm(user_message, history, context)
-
-            # Merge with data already in context — legacy values pass through
-            # validation guard to prevent dirty data from entering FSM slots
+            # Reuse the FSM-extracted data from the universal run
             _fsm_slots_data = {
-                "name": _fsm_extracted.get("name") or validate_legacy_value("name", saved_name),
-                "phone": _fsm_extracted.get("phone") or validate_legacy_value("phone", saved_phone),
-                "email": _fsm_extracted.get("email") or saved_email,
-                "city": _fsm_extracted.get("city") or validate_legacy_value("city", saved_city),
+                "name": (_fsm_slots.name if _fsm_slots else None) or validate_legacy_value("name", saved_name),
+                "phone": (_fsm_slots.phone if _fsm_slots else None) or validate_legacy_value("phone", saved_phone),
+                "email": (_fsm_slots.email if _fsm_slots else None) or saved_email,
+                "city": (_fsm_slots.city if _fsm_slots else None) or validate_legacy_value("city", saved_city),
                 "interest": last_interest,
-                "appointment": _fsm_extracted.get("appointment") or validate_legacy_value("appointment", last_appointment),
-                "payment": _fsm_extracted.get("payment") or validate_legacy_value("payment", last_payment),
-                "offer_amount": _fsm_extracted.get("offer_amount") or extracted_offer,
+                "appointment": (_fsm_slots.appointment if _fsm_slots else None) or validate_legacy_value("appointment", last_appointment),
+                "payment": (_fsm_slots.payment if _fsm_slots else None) or validate_legacy_value("payment", last_payment),
+                "offer_amount": (_fsm_slots.offer_amount if _fsm_slots else None) or extracted_offer,
             }
 
             fsm_result = await _handle_message_fsm(
@@ -2687,14 +2741,14 @@ async def handle_message(
                 history=history,
                 turn_count=turn_count,
                 slots_data=_fsm_slots_data,
-                new_data=_fsm_extracted,  # Only freshly extracted data
+                new_data=_merged_new_data if _fsm_action is not None else _new_extracted_data,
                 campaign=_matched_campaign,
                 inventory_service=inventory_service,
             )
             if fsm_result:
                 return fsm_result
         except Exception as e:
-            logger.error(f"⚠️ FSM falló, cayendo a lógica legacy: {e}")
+            logger.error(f"⚠️ FSM campaign path falló, cayendo a lógica legacy: {e}")
 
     if (_has_campaign_instructions or _is_special_campaign_no_instructions) and not _is_organic_campaign_match:
         # Campaign has specific instructions OR it's a special campaign type (SU/LQ/PR/EV)
@@ -2992,38 +3046,17 @@ async def handle_message(
         if inferred_interest:
             last_interest = inferred_interest
 
-        # --- Validate lead_event ---
-        if isinstance(_lead_candidate, dict):
-            # Fill in slots already known from context
-            if not str(_lead_candidate.get("nombre", "")).strip() and saved_name:
-                _lead_candidate["nombre"] = saved_name
-            if not str(_lead_candidate.get("interes", "")).strip() and last_interest:
-                _lead_candidate["interes"] = last_interest
-            if not str(_lead_candidate.get("cita", "")).strip() and last_appointment:
-                _lead_candidate["cita"] = last_appointment
-            if not str(_lead_candidate.get("pago", "")).strip() and last_payment:
-                _lead_candidate["pago"] = last_payment
-
-            # Reject placeholders from the prompt template
-            _lead_str = json.dumps(_lead_candidate, ensure_ascii=False).lower()
-            _has_placeholder = any(p.lower() in _lead_str for p in _PLACEHOLDER_MARKERS)
-            if _has_placeholder:
-                logger.warning(f"⚠️ lead_event RECHAZADO (contiene placeholder): {_lead_candidate}")
-            elif _lead_is_valid(_lead_candidate):
-                lead_info = _lead_candidate
-                logger.info(f"✅ Lead extraído (JSON mode): {_lead_candidate}")
-            else:
-                logger.warning(f"lead_event descartado (incompleto): {_lead_candidate}")
-
-        # --- Validate campaign_data ---
-        if isinstance(_campaign_candidate, dict) and _campaign_candidate.get("resumen"):
-            _resumen = _campaign_candidate["resumen"]
-            _has_placeholder = any(p.lower() in _resumen.lower() for p in _PLACEHOLDER_MARKERS)
-            if _has_placeholder:
-                logger.warning(f"⚠️ campaign_data RECHAZADO (placeholder): {_resumen}")
-            else:
-                campaign_data_payload = _campaign_candidate
-                logger.info(f"📋 campaign_data extraído: {_resumen}")
+        # ============================================================
+        # ARCHITECTURE: LLM only writes text — business decisions
+        # (lead_event, campaign_data) are IGNORED from LLM output.
+        # The FSM (running universally above) makes these decisions
+        # deterministically. This prevents LLM hallucinations from
+        # creating false leads or incorrect funnel stages.
+        # ============================================================
+        if _lead_candidate:
+            logger.info(f"🚫 LLM lead_event IGNORADO (FSM decide): {_lead_candidate}")
+        if _campaign_candidate:
+            logger.info(f"🚫 LLM campaign_data IGNORADO (FSM decide): {_campaign_candidate}")
 
     except Exception as e:
         logger.error(f"OpenAI error: {e}")
@@ -3164,62 +3197,74 @@ async def handle_message(
     reply_clean = _strip_markdown_links(reply_clean)
 
     # ============================================================
-    # MONDAY FAILSAFE (MEJORADO - AGRESIVO)
+    # FSM-DRIVEN LEAD QUALIFICATION (replaces LLM-based failsafe)
     # ============================================================
-    if lead_info is None:
-        candidate = {
-            "nombre": saved_name,
-            "interes": last_interest,
-            "cita": last_appointment,
-            "pago": last_payment or "Por definir",
-        }
+    # The FSM determines lead qualification deterministically based
+    # on slots filled (name + interest + appointment). No LLM involved.
+    if _fsm_action is not None:
+        # FSM ran — use deterministic lead qualification
+        if _fsm_action in (Action.CONFIRM_LEAD, Action.CONFIRM_REGISTRATION) and _fsm_slots:
+            _fsm_lead = {
+                "nombre": _fsm_slots.name or saved_name,
+                "interes": _fsm_slots.interest or last_interest,
+                "cita": _fsm_slots.appointment or last_appointment,
+                "pago": _fsm_slots.payment or last_payment or "Por definir",
+            }
+            if _lead_is_valid(_fsm_lead):
+                lead_info = _fsm_lead
+                logger.info(f"✅ FSM LEAD: Calificado determinísticamente — {_fsm_lead}")
+        elif _fsm_slots and not _fsm_slots.missing_for_lead():
+            # FSM didn't trigger CONFIRM_LEAD this turn, but all slots are filled
+            _fsm_lead = {
+                "nombre": _fsm_slots.name or saved_name,
+                "interes": _fsm_slots.interest or last_interest,
+                "cita": _fsm_slots.appointment or last_appointment,
+                "pago": _fsm_slots.payment or last_payment or "Por definir",
+            }
+            if _lead_is_valid(_fsm_lead):
+                lead_info = _fsm_lead
+                logger.info(f"✅ FSM LEAD (slots completos): {_fsm_lead}")
+    else:
+        # FSM failed — fallback to legacy slot-based check
+        if saved_name and last_interest and last_appointment:
+            _legacy_lead = {
+                "nombre": saved_name,
+                "interes": last_interest,
+                "cita": last_appointment,
+                "pago": last_payment or "Por definir",
+            }
+            if _lead_is_valid(_legacy_lead):
+                lead_info = _legacy_lead
+                logger.info(f"✅ FALLBACK LEAD (FSM no disponible): {_legacy_lead}")
 
-        # CAMBIO 1: Validar ANTES de esperar confirmación
-        if _lead_is_valid(candidate):
-            lead_info = candidate
-            logger.info(f"✅ FAILSAFE: Lead válido encontrado sin JSON de OpenAI - {candidate}")
-        
-        # CAMBIO 2: Si hay nombre + interés + cita, Y el mensaje es corto (posible confirmación)
-        elif saved_name and last_interest and last_appointment:
-            # Verificar si el mensaje es una confirmación o respuesta corta
-            if _message_confirms_appointment(user_message) or len(user_message.strip()) <= 15:
-                # Forzar registro aunque falte algo
-                candidate["pago"] = candidate.get("pago") or "Por definir"
-                if _lead_is_valid(candidate):
-                    lead_info = candidate
-                    logger.info(f"✅ FAILSAFE AGRESIVO: Mensaje corto '{user_message}' después de cita confirmada - {candidate}")
+    if lead_info:
+        logger.info(f"🎯 LEAD SERÁ ENVIADO A MONDAY: {lead_info}")
 
-    # Log para debugging de leads
-    if saved_name and last_interest and last_appointment:
-        if lead_info:
-            logger.info(f"🎯 LEAD SERÁ ENVIADO A MONDAY: {lead_info}")
+    # ============================================================
+    # FSM-DRIVEN FUNNEL STAGE (replaces legacy heuristic)
+    # ============================================================
+    if _fsm_action is not None:
+        # FSM ran successfully — use its deterministic output
+        is_disinterest = bool(_fsm_meta.get("is_disinterest"))
+        if is_disinterest:
+            funnel_stage = "Sin Interes"
+        elif _fsm_new_state == ConversationState.QUALIFIED:
+            funnel_stage = "Cita Programada"
+        elif _fsm_slots and _fsm_slots.interest:
+            funnel_stage = "Intención"
         else:
-            logger.warning(
-                f"⚠️ LEAD NO GENERADO aunque hay datos: "
-                f"nombre={saved_name}, interes={last_interest}, cita={last_appointment}, "
-                f"mensaje_usuario='{user_message}'"
-            )
-
-    # ============================================================
-    # FUNNEL STAGE CALCULATION (V2)
-    # ============================================================
-    # V2 Labels: 1er Contacto → Intención → Cotización → Cita Programada
-    # "Sin Interes" can override any stage
-    funnel_stage = "1er Contacto"  # Default: primer contacto (V2: merges Mensaje+Enganche)
-
-    if last_interest:
-        funnel_stage = "Intención"  # Modelo específico mencionado
-
-    # Cotización: se marca cuando se envía PDF (ver pdf_info más abajo)
-    # Se maneja después de la detección de PDF
-
-    if last_appointment:
-        funnel_stage = "Cita Programada"  # V2: renamed from "Cita agendada"
-
-    # V2: Sin Interes overrides everything
-    is_disinterest = _detect_disinterest(user_message)
-    if is_disinterest:
-        funnel_stage = "Sin Interes"
+            funnel_stage = "1er Contacto"
+    else:
+        # FSM failed — fallback to legacy heuristic (should be rare)
+        logger.warning("⚠️ FSM no disponible, usando heurística legacy para funnel stage")
+        is_disinterest = _detect_disinterest(user_message)
+        funnel_stage = "1er Contacto"
+        if last_interest:
+            funnel_stage = "Intención"
+        if last_appointment:
+            funnel_stage = "Cita Programada"
+        if is_disinterest:
+            funnel_stage = "Sin Interes"
 
     # Agregar etapa al contexto para tracking
     new_context["funnel_stage"] = funnel_stage
@@ -3260,12 +3305,15 @@ async def handle_message(
         "funnel_stage": funnel_stage,
         "is_disinterest": is_disinterest,
         "funnel_data": {
-            "nombre": saved_name or None,
-            "interes": last_interest or None,
-            "cita": last_appointment or None,
-            "pago": last_payment or None,
+            "nombre": (_fsm_slots.name if _fsm_slots else None) or saved_name or None,
+            "interes": (_fsm_slots.interest if _fsm_slots else None) or last_interest or None,
+            "cita": (_fsm_slots.appointment if _fsm_slots else None) or last_appointment or None,
+            "pago": (_fsm_slots.payment if _fsm_slots else None) or last_payment or None,
             "turn_count": turn_count,
         },
         "pdf_info": pdf_info,
         "campaign_data": campaign_data_payload,
+        "slot_changes": _fsm_meta.get("slot_changes", []),
+        "fsm_action": _fsm_action.value if _fsm_action else None,
+        "fsm_state": _fsm_new_state.value if _fsm_new_state else None,
     }
