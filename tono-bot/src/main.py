@@ -1520,13 +1520,23 @@ async def send_evolution_document(bot_state: GlobalState, number_or_jid: str, te
             # Pequeña espera para que WhatsApp ordene los mensajes
             await asyncio.sleep(1.2)
 
-        # 2. Enviar PDF como documento (con retry)
+        # 2. Descargar PDF y convertir a base64 para enviarlo como archivo adjunto
+        try:
+            pdf_response = await client.get(pdf_url, follow_redirects=True, timeout=30.0)
+            pdf_response.raise_for_status()
+            pdf_b64 = base64.b64encode(pdf_response.content).decode("utf-8")
+            logger.info(f"📥 PDF descargado: {filename} ({len(pdf_response.content)} bytes)")
+        except Exception as _dl_err:
+            logger.error(f"❌ No se pudo descargar PDF {pdf_url}: {_dl_err}")
+            await _evo_post(client, f"/message/sendText/{quote(settings.EVO_INSTANCE, safe='')}", json={"number": clean_number, "text": "No pude enviar el PDF en este momento. Un asesor te lo comparte."})
+            return
+
         url_media = f"/message/sendMedia/{quote(settings.EVO_INSTANCE, safe='')}"
         payload_pdf = {
             "number": clean_number,
             "mediatype": "document",
             "mimetype": "application/pdf",
-            "media": pdf_url,
+            "media": pdf_b64,
             "fileName": filename,
             "caption": ""
         }
