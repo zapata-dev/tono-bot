@@ -1134,6 +1134,67 @@ def resolve_state(
 
 
 # ============================================================
+# MULTI-MESSAGE INTENT RESOLUTION
+# ============================================================
+
+# Intents that are "generic" and should yield to more specific signals
+_TRIVIAL_INTENTS = {Intent.GREETING, Intent.ASK_QUESTION}
+
+
+def _resolve_multi_message_intent(
+    parts: List[str],
+    slots: "Slots",
+    last_action: Optional[Action],
+    new_data: Optional[Dict[str, str]],
+    state: Optional[ConversationState],
+    has_campaign: bool,
+) -> Intent:
+    """Classify each accumulated sub-message individually and pick the
+    dominant intent for the FSM.
+
+    Resolution rules (highest priority first):
+    1. DISINTEREST in the LAST part → always wins (user's final word).
+    2. Last non-trivial intent in the sequence (newest substantive signal).
+    3. Last intent overall (fallback when all are trivial, e.g. GREETING).
+
+    Examples
+    --------
+    "Hola | ¿cuánto cuesta?"          → ASK_PRICE      (last non-trivial)
+    "Hola | ¿cuánto? | no gracias"    → DISINTEREST    (last = DISINTEREST)
+    "no gracias | bueno sí quiero"    → CONFIRM        (last overrides earlier DISINTEREST)
+    "hola | buenos días"              → GREETING       (all trivial, last wins)
+    "quiero saber el precio | ¿cómo llego?" → ASK_LOCATION (last non-trivial)
+    """
+    if len(parts) == 1:
+        return classify_intent(parts[0], slots, last_action, new_data, state, has_campaign)
+
+    intents = [
+        classify_intent(p.strip(), slots, last_action, new_data, state, has_campaign)
+        for p in parts
+    ]
+
+    logger.debug(f"🧩 multi-intent parts={parts} → intents={[i.value for i in intents]}")
+
+    # Rule 1: last message is DISINTEREST
+    if intents[-1] == Intent.DISINTEREST:
+        logger.info(f"🧩 multi-intent resolved DISINTEREST (last msg = '{parts[-1][:40]}')")
+        return Intent.DISINTEREST
+
+    # Rule 2: last non-trivial intent
+    for intent, part in zip(reversed(intents), reversed(parts)):
+        if intent not in _TRIVIAL_INTENTS:
+            if len(intents) > 1:
+                logger.info(
+                    f"🧩 multi-intent resolved {intent.value} "
+                    f"(last substantive msg = '{part[:40]}')"
+                )
+            return intent
+
+    # Rule 3: all trivial — return last one
+    return intents[-1]
+
+
+# ============================================================
 # MAIN ENTRY POINT
 # ============================================================
 
@@ -1175,7 +1236,7 @@ def process_fsm(
     # Resolve current state
     state = resolve_state(context, slots, has_campaign, turn_count)
 
-    # Classify intent (now context-aware)
+    # Classify intent (now context-aware + multi-message aware)
     last_action_str = context.get("last_action")
     last_action = None
     if last_action_str:
@@ -1184,10 +1245,21 @@ def process_fsm(
         except ValueError:
             pass
 
-    intent = classify_intent(
-        user_message, slots, last_action, new_data,
-        current_state=state, has_campaign=has_campaign,
-    )
+    # Accumulated messages arrive joined with " | " (see main.py debouncing).
+    # Classify each sub-message individually so that contradictory intents
+    # (e.g. "Hola | ¿cuánto cuesta? | no gracias") resolve correctly instead
+    # of being classified as a single confusing blob.
+    _accumulated_parts = [p for p in user_message.split(" | ") if p.strip()]
+    if len(_accumulated_parts) > 1:
+        intent = _resolve_multi_message_intent(
+            _accumulated_parts, slots, last_action, new_data,
+            state=state, has_campaign=has_campaign,
+        )
+    else:
+        intent = classify_intent(
+            user_message, slots, last_action, new_data,
+            current_state=state, has_campaign=has_campaign,
+        )
 
     # Decide action
     action, new_state, meta = decide_action(
