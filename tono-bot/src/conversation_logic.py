@@ -298,35 +298,33 @@ REGLAS OBLIGATORIAS:
 - Si el cliente pregunta "¿dónde es?" o "¿de dónde son?": Da la ubicación ANTES de seguir con la cita.
 - Si dice "háblame", "llámame", "márcame": Responde "Con gusto, ¿a qué número y en qué horario te marco?" NO agendes cita, él quiere llamada.
 
-14) LEAD (JSON):
-- SOLO genera JSON si hay: NOMBRE + MODELO + CITA CONFIRMADA.
-- USA los datos REALES del cliente, NUNCA uses datos de ejemplo ni inventados.
-```json
+14) FORMATO DE RESPUESTA (OBLIGATORIO — SIEMPRE):
+Tu respuesta SIEMPRE debe ser un objeto JSON válido con EXACTAMENTE esta estructura:
 {{
-  "lead_event": {{
+  "reply": "Tu mensaje al cliente aquí (máximo 2 oraciones, sin emojis, en español)",
+  "lead_event": null,
+  "campaign_data": null
+}}
+
+- "reply": REQUERIDO. Tu mensaje al cliente. Máximo 2 oraciones. Sin emojis. En español.
+- "lead_event": OPCIONAL. Incluye SOLO si hay NOMBRE + MODELO + CITA reales y confirmados:
+  {{
     "nombre": "[nombre real del cliente]",
     "interes": "[modelo del inventario]",
     "cita": "[fecha/hora real de la cita]",
-    "pago": "[Contado o Financiamiento]"
+    "pago": "[Contado o Financiamiento o Por definir]"
   }}
-}}
-```
-
-14b) DATOS DE CAMPAÑA (JSON):
-- Si hay CAMPAÑA ACTIVA y el cliente proporcionó TODOS los datos que pide la campaña, genera:
-```json
-{{
-  "campaign_data": {{
+- "campaign_data": OPCIONAL. Incluye SOLO si hay CAMPAÑA ACTIVA y el cliente dio TODOS los datos requeridos:
+  {{
     "resumen": "[Dato1]: [valor real] | [Dato2]: [valor real] | ..."
   }}
-}}
-```
-- Ejemplo de formato: "Propuesta: $700,000 | Nombre: María López | Tel: 3312345678 | Email: maria@empresa.com | Ciudad: Guadalajara | Plazo: 3 meses"
-- IMPORTANTE: USA SOLO datos REALES que el cliente proporcionó. NUNCA inventes datos ni uses ejemplos.
-- Si el cliente NO ha dado un dato requerido, NO generes el JSON. Espera a tenerlos TODOS.
-- Este JSON es INDEPENDIENTE del lead_event (no necesita cita confirmada).
-- Solo genera cuando tengas TODOS los datos solicitados por la campaña.
-- El "resumen" debe listar cada dato con su etiqueta, separados por " | ".
+  Ejemplo: "Propuesta: $700,000 | Nombre: María López | Tel: 3312345678 | Email: maria@empresa.com | Ciudad: Guadalajara | Plazo: 3 meses"
+
+REGLAS CRÍTICAS DE FORMATO:
+- NUNCA escribas texto fuera del JSON. Solo el objeto JSON, nada más.
+- Si no aplica lead_event o campaign_data, usa null (no omitas las llaves).
+- NUNCA inventes datos ni uses ejemplos en lead_event o campaign_data. Solo datos reales del cliente.
+- Si le falta algún dato requerido al lead_event o campaign_data, usa null y espera a tenerlos todos.
 
 15) TOMA A CUENTA / TRADE-IN:
 - Si el cliente pregunta si reciben su vehículo actual a cuenta, en intercambio, o como enganche:
@@ -1910,8 +1908,13 @@ async def _llm_try_provider(
     max_tokens: int,
     label: str,
     max_retries: int = 2,
+    response_format: Optional[dict] = None,
 ) -> Optional[Any]:
     """Intenta un proveedor LLM con retries cortos. Retorna respuesta o None."""
+    extra_kwargs = {}
+    if response_format:
+        extra_kwargs["response_format"] = response_format
+
     for _attempt in range(max_retries):
         try:
             resp = await llm_client.chat.completions.create(
@@ -1919,6 +1922,7 @@ async def _llm_try_provider(
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                **extra_kwargs,
             )
             return resp
         except (APITimeoutError, RateLimitError, APIConnectionError) as e:
@@ -1946,10 +1950,18 @@ async def _llm_try_provider(
     return None
 
 
-async def _llm_call_with_fallback(messages: list, temperature: float = 0.3, max_tokens: int = 350):
+async def _llm_call_with_fallback(
+    messages: list,
+    temperature: float = 0.3,
+    max_tokens: int = 350,
+    response_format: Optional[dict] = None,
+):
     """
     Intenta el proveedor primario (configurable via LLM_PRIMARY) con retries cortos,
     luego cae al secundario. Reduce latencia vs 3 retries largos.
+
+    response_format: optional dict passed to the API (e.g. {"type": "json_object"}).
+                     Both OpenAI and Gemini OpenAI-compat endpoint support this.
     """
     if LLM_PRIMARY == "openai":
         providers = [
@@ -1968,7 +1980,7 @@ async def _llm_call_with_fallback(messages: list, temperature: float = 0.3, max_
     # --- Intento primario (2 retries, backoff corto: 1s, 2s) ---
     resp = await _llm_try_provider(
         primary_client, primary_model, messages, temperature, max_tokens,
-        label=primary_label, max_retries=2,
+        label=primary_label, max_retries=2, response_format=response_format,
     )
     if resp is not None:
         return resp
@@ -1977,13 +1989,90 @@ async def _llm_call_with_fallback(messages: list, temperature: float = 0.3, max_
     logger.warning(f"🔄 {primary_label} falló. Usando fallback {fallback_label} ({fallback_model})...")
     resp = await _llm_try_provider(
         fallback_client, fallback_model, messages, temperature, max_tokens,
-        label=f"Fallback-{fallback_label}", max_retries=2,
+        label=f"Fallback-{fallback_label}", max_retries=2, response_format=response_format,
     )
     if resp is not None:
         logger.info(f"✅ Fallback {fallback_label} ({fallback_model}) exitoso.")
         return resp
 
     raise RuntimeError(f"Ambos proveedores LLM fallaron ({primary_label} + {fallback_label})")
+
+
+# ============================================================
+# STRUCTURED LLM RESPONSE PARSER
+# ============================================================
+
+def _parse_structured_reply(raw: str) -> Tuple[str, Optional[dict], Optional[dict]]:
+    """Parse a legacy-path LLM response that should be a JSON object.
+
+    Expected schema (enforced via response_format=json_object):
+      {
+        "reply":         "<text to show the user>",
+        "lead_event":    { ... } | null,
+        "campaign_data": { "resumen": "..." } | null
+      }
+
+    Falls back gracefully when the model ignores the JSON instruction and
+    returns plain text with embedded ```json blocks (old format).
+
+    Returns:
+        (reply_text, lead_event_dict_or_None, campaign_data_dict_or_None)
+    """
+    raw = (raw or "").strip()
+
+    # --- Happy path: well-formed JSON object ---
+    try:
+        payload = json.loads(raw)
+        if isinstance(payload, dict):
+            reply = str(payload.get("reply") or "").strip()
+            lead_event = payload.get("lead_event") or None
+            campaign_data = payload.get("campaign_data") or None
+            if reply:
+                logger.debug("✅ Structured JSON reply parsed successfully")
+                return reply, lead_event, campaign_data
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # --- Fallback: plain text with optional ```json blocks (legacy format) ---
+    logger.warning("⚠️ LLM ignored JSON mode — falling back to regex extraction")
+    lead_event: Optional[dict] = None
+    campaign_data: Optional[dict] = None
+
+    reply_text = raw
+
+    # Extract embedded ```json … ``` blocks
+    json_matches = list(re.finditer(
+        r"```json\s*(\{.*?\})\s*```", raw, flags=re.DOTALL | re.IGNORECASE
+    ))
+    if not json_matches:
+        json_matches = list(re.finditer(
+            r"(?:^|\n)\s*json\s*\n\s*(\{.*?\})\s*(?:\n|$)",
+            raw, flags=re.DOTALL | re.IGNORECASE,
+        ))
+
+    for m in json_matches:
+        try:
+            block = json.loads(m.group(1))
+            if isinstance(block, dict):
+                if isinstance(block.get("lead_event"), dict):
+                    lead_event = block["lead_event"]
+                if isinstance(block.get("campaign_data"), dict):
+                    campaign_data = block["campaign_data"]
+        except Exception:
+            pass
+        reply_text = reply_text.replace(m.group(0), "")
+
+    # Strip remaining leaked JSON artifacts
+    reply_text = re.sub(
+        r'(?:^|\n)\s*json\s*\n\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}\s*',
+        '', reply_text, flags=re.DOTALL | re.IGNORECASE,
+    ).strip()
+    reply_text = re.sub(
+        r'\{\s*"(?:campaign_data|lead_event)"\s*:\s*\{[^}]*\}\s*\}',
+        '', reply_text, flags=re.DOTALL,
+    ).strip()
+
+    return reply_text.strip(), lead_event, campaign_data
 
 
 # ============================================================
@@ -2878,85 +2967,63 @@ async def handle_message(
     campaign_data_payload: Optional[Dict[str, Any]] = None
     reply_clean = "Hubo un error técnico."
 
+    # Placeholder markers used in prompt examples — reject if found in extracted data
+    _PLACEHOLDER_MARKERS = [
+        "x@y.com", "5551234567", "821,000", "Juan Perez",
+        "juan@correo.com", "Nayarit", "[nombre real", "[modelo del",
+        "[fecha/hora", "[Contado o",
+    ]
+
     try:
-        resp = await _llm_call_with_fallback(messages)
+        # JSON mode: forces the model to always return a valid JSON object.
+        # _parse_structured_reply() extracts reply/lead_event/campaign_data and
+        # falls back to regex parsing if the model ignores the format instruction.
+        resp = await _llm_call_with_fallback(
+            messages,
+            max_tokens=450,
+            response_format={"type": "json_object"},
+        )
 
         raw_reply = resp.choices[0].message.content or ""
-        reply_clean = raw_reply
+        reply_clean, _lead_candidate, _campaign_candidate = _parse_structured_reply(raw_reply)
 
         # Update interest using user+bot text
-        inferred_interest = _extract_interest_from_messages(user_message, raw_reply, inventory_service)
+        inferred_interest = _extract_interest_from_messages(user_message, reply_clean, inventory_service)
         if inferred_interest:
             last_interest = inferred_interest
 
-        # Extract ALL JSON blocks from the model (inside ```json ... ```)
-        # Use finditer to catch multiple blocks (e.g. lead_event + campaign_data separately)
-        json_matches = list(re.finditer(r"```json\s*(\{.*?\})\s*```", raw_reply, flags=re.DOTALL | re.IGNORECASE))
+        # --- Validate lead_event ---
+        if isinstance(_lead_candidate, dict):
+            # Fill in slots already known from context
+            if not str(_lead_candidate.get("nombre", "")).strip() and saved_name:
+                _lead_candidate["nombre"] = saved_name
+            if not str(_lead_candidate.get("interes", "")).strip() and last_interest:
+                _lead_candidate["interes"] = last_interest
+            if not str(_lead_candidate.get("cita", "")).strip() and last_appointment:
+                _lead_candidate["cita"] = last_appointment
+            if not str(_lead_candidate.get("pago", "")).strip() and last_payment:
+                _lead_candidate["pago"] = last_payment
 
-        # Fallback: catch JSON blocks without proper backticks (e.g. "json\n{...}")
-        if not json_matches:
-            json_matches = list(re.finditer(
-                r"(?:^|\n)\s*json\s*\n\s*(\{.*?\})\s*(?:\n|$)",
-                raw_reply, flags=re.DOTALL | re.IGNORECASE,
-            ))
+            # Reject placeholders from the prompt template
+            _lead_str = json.dumps(_lead_candidate, ensure_ascii=False).lower()
+            _has_placeholder = any(p.lower() in _lead_str for p in _PLACEHOLDER_MARKERS)
+            if _has_placeholder:
+                logger.warning(f"⚠️ lead_event RECHAZADO (contiene placeholder): {_lead_candidate}")
+            elif _lead_is_valid(_lead_candidate):
+                lead_info = _lead_candidate
+                logger.info(f"✅ Lead extraído (JSON mode): {_lead_candidate}")
+            else:
+                logger.warning(f"lead_event descartado (incompleto): {_lead_candidate}")
 
-        if json_matches:
-            for json_match in json_matches:
-                try:
-                    payload = json.loads(json_match.group(1))
-                    candidate = payload.get("lead_event") if isinstance(payload, dict) else None
-
-                    if isinstance(candidate, dict):
-                        # Inject what we already know
-                        if not str(candidate.get("nombre", "")).strip() and saved_name:
-                            candidate["nombre"] = saved_name
-                        if not str(candidate.get("interes", "")).strip() and last_interest:
-                            candidate["interes"] = last_interest
-                        if not str(candidate.get("cita", "")).strip() and last_appointment:
-                            candidate["cita"] = last_appointment
-                        if not str(candidate.get("pago", "")).strip() and last_payment:
-                            candidate["pago"] = last_payment
-
-                        if _lead_is_valid(candidate):
-                            lead_info = candidate
-                            logger.info(f"✅ Lead extraído del JSON de OpenAI: {candidate}")
-                        else:
-                            logger.warning(f"Lead JSON discarded (incomplete): {candidate}")
-
-                    # Extract campaign_data if present (independent of lead_event)
-                    cd = payload.get("campaign_data") if isinstance(payload, dict) else None
-                    if isinstance(cd, dict) and cd.get("resumen"):
-                        # Validate: reject if it contains placeholder/example data from prompt
-                        _resumen = cd["resumen"]
-                        _placeholder_markers = [
-                            "x@y.com", "5551234567", "821,000", "Juan Perez",
-                            "juan@correo.com", "Nayarit",
-                        ]
-                        _has_placeholder = any(p.lower() in _resumen.lower() for p in _placeholder_markers)
-                        if _has_placeholder:
-                            logger.warning(f"⚠️ Campaign data RECHAZADO (contiene datos placeholder): {_resumen}")
-                        else:
-                            campaign_data_payload = cd
-                            logger.info(f"📋 Campaign data extraído: {_resumen}")
-                except Exception as e:
-                    logger.error(f"Error parseando JSON de lead: {e}")
-
-            # Hide ALL matched JSON blocks from user-facing message
-            reply_clean = raw_reply
-            for json_match in json_matches:
-                reply_clean = reply_clean.replace(json_match.group(0), "")
-            reply_clean = reply_clean.strip()
-
-        # Final safety net: strip any remaining JSON-like blocks that GPT may have leaked
-        # Catches patterns like: json\n{ ... } or bare { "campaign_data": ... }
-        reply_clean = re.sub(
-            r'(?:^|\n)\s*json\s*\n\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}\s*',
-            '', reply_clean, flags=re.DOTALL | re.IGNORECASE,
-        ).strip()
-        reply_clean = re.sub(
-            r'\{\s*"(?:campaign_data|lead_event)"\s*:\s*\{[^}]*\}\s*\}',
-            '', reply_clean, flags=re.DOTALL,
-        ).strip()
+        # --- Validate campaign_data ---
+        if isinstance(_campaign_candidate, dict) and _campaign_candidate.get("resumen"):
+            _resumen = _campaign_candidate["resumen"]
+            _has_placeholder = any(p.lower() in _resumen.lower() for p in _PLACEHOLDER_MARKERS)
+            if _has_placeholder:
+                logger.warning(f"⚠️ campaign_data RECHAZADO (placeholder): {_resumen}")
+            else:
+                campaign_data_payload = _campaign_candidate
+                logger.info(f"📋 campaign_data extraído: {_resumen}")
 
     except Exception as e:
         logger.error(f"OpenAI error: {e}")
@@ -3001,8 +3068,13 @@ async def handle_message(
                 )},
             ]
             try:
-                _retry_resp = await _llm_call_with_fallback(messages + _anti_repeat)
-                _retry_reply = (_retry_resp.choices[0].message.content or "").strip()
+                _retry_resp = await _llm_call_with_fallback(
+                    messages + _anti_repeat,
+                    max_tokens=450,
+                    response_format={"type": "json_object"},
+                )
+                _raw_retry = (_retry_resp.choices[0].message.content or "").strip()
+                _retry_reply, _, _ = _parse_structured_reply(_raw_retry)
                 _retry_reply = re.sub(
                     r"^(Adrian|Asesor|Bot)\s*:\s*", "", _retry_reply.strip(), flags=re.IGNORECASE,
                 ).strip()
