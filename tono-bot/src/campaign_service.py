@@ -212,18 +212,27 @@ class CampaignService:
                 return c
         return None
 
-    def find_campaign_by_model_code(self, model_code: str) -> Optional[Campaign]:
-        """Fallback: busca campaña cuyo tracking ID comparta el mismo código de modelo.
+    def find_campaign_by_model_code(self, model_code: str, campaign_type: str = "") -> Optional[Campaign]:
+        """Fallback: busca campaña cuyo tracking ID comparta el mismo código de modelo y tipo.
 
-        Ejemplo: model_code="CA" matchea campaña con tracking_id="CA-A1".
-        Útil cuando el anuncio usa CA-SU1 pero el Sheet tiene CA-A1.
+        Ejemplo: model_code="CA", campaign_type="SU" matchea campaña con tracking_id="CA-SU1".
+        Evita que un anuncio regular (CA-A) active una campaña especial (CA-SU).
         """
         if not model_code:
             return None
         prefix = model_code.strip().upper()
+        ctype = campaign_type.strip().upper() if campaign_type else ""
         for c in self.get_active_campaigns():
-            if c.tracking_id and c.tracking_id.upper().startswith(prefix + "-"):
-                return c
+            if c.tracking_id:
+                tid = c.tracking_id.upper()
+                if ctype:
+                    # Debe coincidir el modelo Y el tipo de campaña (ej: "CA-SU")
+                    if tid.startswith(f"{prefix}-{ctype}"):
+                        return c
+                else:
+                    # Comportamiento legacy (solo modelo) si no se pasa el tipo
+                    if tid.startswith(prefix + "-"):
+                        return c
         return None
 
     def find_campaign_by_keywords(self, message: str) -> Optional[Campaign]:

@@ -439,8 +439,6 @@ def _detect_pdf_request(user_message: str, last_interest: str, context: Dict[str
             "bases de la campaña", "bases de la campana",
             "bases de la dinamica", "bases de la dinámica",
             "bases del concurso", "bases legales",
-            "terminos", "términos", "condiciones",
-            "bases",
         ]
         if any(k in msg for k in bases_keywords):
             logger.info(f"📄 Bases/T&C solicitadas para campaña")
@@ -2659,10 +2657,12 @@ async def handle_message(
             # 1. Match exacto por tracking ID (CA-SU1 == CA-SU1)
             _matched_campaign = campaign_service.find_campaign_by_tracking_id(tracking_id)
             if not _matched_campaign:
-                # 2. Fallback: match por prefijo de modelo (CA-SU1 → "CA" → encuentra "CA-A1")
-                model_code = (context.get("tracking_data") or {}).get("model_code", "")
+                # 2. Fallback: match por prefijo de modelo Y tipo de campaña (CA-SU2 → encuentra CA-SU1)
+                tracking_data = context.get("tracking_data") or {}
+                model_code = tracking_data.get("model_code", "")
+                camp_type = tracking_data.get("campaign_type", "")
                 if model_code:
-                    _matched_campaign = campaign_service.find_campaign_by_model_code(model_code)
+                    _matched_campaign = campaign_service.find_campaign_by_model_code(model_code, camp_type)
                     if _matched_campaign:
                         logger.info(
                             f"🏷️ Campaña matcheada por modelo: {tracking_id} → "
