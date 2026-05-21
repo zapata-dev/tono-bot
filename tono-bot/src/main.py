@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     # Monitoreo
     SENTRY_DSN: str = ""  # Si se configura, habilita Sentry error tracking
 
+    # Ubicación del negocio — override del brand.yaml cuando el link cambia
+    OFFICE_MAPS_URL: Optional[str] = None
+
     class Config:
         env_file = ".env"
         extra = "ignore"
@@ -813,7 +816,7 @@ async def _process_accumulated_messages(bot_state: GlobalState, remote_jid: str)
             # === Procesar con IA ===
             _llm_t0 = time.monotonic()
             try:
-                result = await handle_message(combined_message, bot_state.inventory, state, context, campaign_service=bot_state.campaigns)
+                result = await handle_message(combined_message, bot_state.inventory, state, context, campaign_service=bot_state.campaigns, office_maps_url_override=settings.OFFICE_MAPS_URL)
             except Exception as e:
                 logger.error(f"❌ Error IA: {e}")
                 result = {

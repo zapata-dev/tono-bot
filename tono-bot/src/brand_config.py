@@ -71,11 +71,12 @@ def get_brand_config() -> Dict[str, Any]:
     return cfg
 
 
-def render_system_prompt(**runtime_vars) -> str:
+def render_system_prompt(office_maps_url_override: str = None, **runtime_vars) -> str:
     """
     Renderiza el system prompt con valores de marca + valores de runtime.
     Runtime vars (current_time_str, user_name_context, etc.) se pasan
     desde conversation_logic.py en cada turno.
+    office_maps_url_override: si se pasa (env var OFFICE_MAPS_URL), reemplaza el valor de brand.yaml.
     """
     cfg = get_brand_config()
     if not cfg["prompt_template"]:
@@ -83,12 +84,17 @@ def render_system_prompt(**runtime_vars) -> str:
             f"brand/prompt.md not found at {BRAND_DIR / 'prompt.md'}. "
             "Create it from the SYSTEM_PROMPT template."
         )
+    effective_maps_url = (
+        office_maps_url_override.strip()
+        if office_maps_url_override and office_maps_url_override.strip()
+        else cfg["business"]["office_maps_url"]
+    )
     all_vars = {
         "brand_name": cfg["brand"]["name"],
         "persona_name": cfg["bot"]["persona_name"],
         "office_label": cfg["business"]["office_label"],
         "office_full_address": cfg["business"]["office_full_address"],
-        "office_maps_url": cfg["business"]["office_maps_url"],
+        "office_maps_url": effective_maps_url,
         "hours_weekdays": cfg["business"]["hours_weekdays"],
         "hours_saturday": cfg["business"]["hours_saturday"],
         **runtime_vars,

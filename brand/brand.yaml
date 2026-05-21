@@ -20,7 +20,7 @@ bot:
 business:
   office_label: "Tlalnepantla, Edo Mex"
   office_full_address: "Camiones del Valle Tlalnepantla"
-  office_maps_url: "https://maps.app.goo.gl/v9KigGY3QVAxqwV17"
+  office_maps_url: "https://maps.app.goo.gl/v9KigGY3QVAxqwV17"  # ACTUALIZAR: este link está roto — usa la variable de entorno OFFICE_MAPS_URL en Cloud Run para sobreescribirlo sin redesplegar
   timezone: "America/Mexico_City"
   hours_weekdays: "Lunes a Viernes 9:00 a 18:00"
   hours_saturday: "Sábados 9:00 a 14:00"

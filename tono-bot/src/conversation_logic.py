@@ -2026,12 +2026,16 @@ async def _handle_message_fsm(
 
     # Location link extraction (when user asks for location)
     location_link = None
-    if meta.get("intent") == "ask_location" and slots.interest:
-        location_link = _extract_location_link(
-            inventory_service, slots.interest,
-            new_context.get("interest_ubicacion", ""),
-            new_context.get("user_city", ""),
-        )
+    if meta.get("intent") == "ask_location":
+        if slots.interest:
+            location_link = _extract_location_link(
+                inventory_service, slots.interest,
+                new_context.get("interest_ubicacion", ""),
+                new_context.get("user_city", ""),
+            )
+        # Fallback: use office override if inventory has no link
+        if not location_link and office_maps_url_override and office_maps_url_override.strip():
+            location_link = office_maps_url_override.strip()
         if location_link:
             logger.info(f"📍 Location link found: {location_link}")
 
@@ -2106,6 +2110,7 @@ async def handle_message(
     state: str,
     context: Dict[str, Any],
     campaign_service=None,
+    office_maps_url_override: Optional[str] = None,
 ) -> Dict[str, Any]:
     user_message = user_message or ""
     context = context or {}
@@ -2427,6 +2432,7 @@ async def handle_message(
         current_date_str=current_date_str,
         user_name_context=saved_name if saved_name else "(Aún no dice su nombre)",
         turn_number=turn_count,
+        office_maps_url_override=office_maps_url_override,
     )
 
     # Smart context injection: only include inventory/financing when relevant
