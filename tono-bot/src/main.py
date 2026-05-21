@@ -23,6 +23,7 @@ from pydantic_settings import BaseSettings
 # === IMPORTACIONES PROPIAS ===
 from src.inventory_service import InventoryService
 from src.campaign_service import CampaignService
+from src.locations_service import LocationsService
 from src.conversation_logic import (
     handle_message,
     client as gemini_client,
@@ -35,7 +36,7 @@ from src.conversation_logic import (
 )
 from src.memory_store import MemoryStore
 from src.monday_service import monday_service, extract_tracking_id, strip_tracking_id
-from src.brand_config import get_inventory_path
+from src.brand_config import get_inventory_path, get_sucursales_fallback
 
 
 # === 1. CONFIGURACIÓN ROBUSTA (Pydantic) ===
@@ -70,6 +71,10 @@ class Settings(BaseSettings):
 
     # Ubicación del negocio — override del brand.yaml cuando el link cambia
     OFFICE_MAPS_URL: Optional[str] = None
+
+    # Sucursales — pestaña "Sucursales" del Google Sheet (CSV export URL)
+    SUCURSALES_CSV_URL: Optional[str] = None
+    SUCURSALES_REFRESH_SECONDS: int = 300
 
     class Config:
         env_file = ".env"
@@ -167,6 +172,7 @@ class GlobalState:
         self.http_client: Optional[httpx.AsyncClient] = None
         self.inventory: Optional[InventoryService] = None
         self.campaigns: Optional[CampaignService] = None
+        self.locations: Optional[LocationsService] = None
         self.store: Optional[MemoryStore] = None
 
         # dedupe RAM (O(1) lookup con evicción FIFO)
@@ -243,6 +249,25 @@ async def lifespan(app: FastAPI):
         logger.info(f"📢 Campañas cargadas: {active_count} activas.")
     except Exception as e:
         logger.error(f"⚠️ Error cargando campañas iniciales: {e}")
+
+    # B3) Sucursales — fuente única de verdad para links de Maps
+    bot_state.locations = LocationsService(
+        csv_url=settings.SUCURSALES_CSV_URL,
+        brand_sucursales=get_sucursales_fallback(),
+        refresh_seconds=settings.SUCURSALES_REFRESH_SECONDS,
+    )
+    if not settings.SUCURSALES_CSV_URL:
+        logger.warning(
+            "⚠️ SUCURSALES_CSV_URL no configurado. Usando sucursales de brand.yaml como fallback. "
+            "Para gestionar sucursales sin deploy, configura una pestaña 'Sucursales' en Google Sheets."
+        )
+    try:
+        await bot_state.locations.load(force=True)
+        logger.info(f"📍 Sucursales cargadas: {len(bot_state.locations)} sucursales.")
+        # Validación de links al arranque (no bloquea, solo logea y alerta)
+        asyncio.create_task(_validate_location_links_on_startup(bot_state))
+    except Exception as e:
+        logger.error(f"⚠️ Error cargando sucursales: {e}")
 
     # C) Memoria
     _store = MemoryStore()
@@ -686,6 +711,34 @@ async def human_typing_delay():
     await asyncio.sleep(delay)
 
 
+# === 7. VALIDACIÓN DE LINKS DE SUCURSALES (startup, no bloquea) ===
+async def _validate_location_links_on_startup(bot_state: GlobalState):
+    """
+    Corre en background al arrancar. Verifica que todos los maps_url de sucursales
+    respondan correctamente. Si encuentra links rotos, los registra y alerta al owner.
+    """
+    if not bot_state.locations:
+        return
+    await asyncio.sleep(15)  # espera a que el servidor termine de arrancar
+    try:
+        errors = await bot_state.locations.validate_maps_urls()
+        if errors:
+            error_text = "\n".join(errors)
+            logger.error(f"📍 Links de sucursales ROTOS detectados al arrancar:\n{error_text}")
+            owner = settings.OWNER_PHONE
+            if owner and bot_state.http_client:
+                msg = (
+                    "⚠️ ALERTA: Los siguientes links de Maps están rotos y se mandaron a clientes:\n\n"
+                    + error_text
+                    + "\n\nActualiza los links en la pestaña Sucursales del Sheet o en brand.yaml."
+                )
+                await send_evolution_message(bot_state, owner, msg)
+        else:
+            logger.info("✅ Validación de links de sucursales: todos OK.")
+    except Exception as e:
+        logger.warning(f"⚠️ No se pudo validar links de sucursales: {e}")
+
+
 # === 6.5 PROCESAMIENTO DE MENSAJES ACUMULADOS ===
 async def _process_accumulated_messages(bot_state: GlobalState, remote_jid: str):
     """
@@ -816,7 +869,12 @@ async def _process_accumulated_messages(bot_state: GlobalState, remote_jid: str)
             # === Procesar con IA ===
             _llm_t0 = time.monotonic()
             try:
-                result = await handle_message(combined_message, bot_state.inventory, state, context, campaign_service=bot_state.campaigns, office_maps_url_override=settings.OFFICE_MAPS_URL)
+                result = await handle_message(
+                    combined_message, bot_state.inventory, state, context,
+                    campaign_service=bot_state.campaigns,
+                    locations_service=bot_state.locations,
+                    office_maps_url_override=settings.OFFICE_MAPS_URL,
+                )
             except Exception as e:
                 logger.error(f"❌ Error IA: {e}")
                 result = {

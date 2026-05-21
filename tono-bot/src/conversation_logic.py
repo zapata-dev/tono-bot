@@ -686,10 +686,21 @@ def _extract_photos_from_item(item: Dict[str, Any]) -> List[str]:
 
 
 def _extract_location_link(
-    inventory_service, last_interest: str, interest_ubicacion: str = "", user_city: str = ""
+    inventory_service,
+    last_interest: str,
+    locations_service=None,
+    interest_ubicacion: str = "",
+    user_city: str = "",
 ) -> Optional[str]:
-    """Extract ubicacion_link from inventory for the model of interest.
-    Priority: 1) interest_ubicacion (explicit), 2) user_city slot, 3) first matching item.
+    """
+    Devuelve el maps_url para la unidad/modelo de interés.
+
+    Cadena de resolución por item:
+      1. sucursal_id del item → LocationsService.get() → best_maps_url
+      2. ubicacion_link del item (legacy, fase de transición)
+
+    Luego elige el mejor candidato entre los items coincidentes aplicando
+    las mismas prioridades de antes (interest_ubicacion > user_city > primero).
     """
     items = getattr(inventory_service, "items", None) or []
     if not items or not last_interest:
@@ -703,8 +714,8 @@ def _extract_location_link(
 
     ubic_norm = _normalize_spanish(interest_ubicacion) if interest_ubicacion else ""
     user_city_clean = _strip_accents(_normalize_spanish(user_city)) if user_city else ""
-    best_link = None       # fallback: first matching item
-    city_match_link = None  # secondary: user_city match
+    best_link = None
+    city_match_link = None
 
     for item in items:
         modelo = _safe_get(item, ["Modelo", "modelo", "id_modelo"]).strip()
@@ -714,7 +725,18 @@ def _extract_location_link(
         if not any(tok in modelo_norm for tok in interest_tokens):
             continue
 
-        link = _safe_get(item, ["ubicacion_link"])
+        # Resolución del link: sucursal_id primero, ubicacion_link como legacy
+        link = None
+        sucursal_id = _safe_get(item, ["sucursal_id"])
+        if sucursal_id and locations_service:
+            sucursal = locations_service.get(sucursal_id)
+            if sucursal and sucursal.best_maps_url:
+                link = sucursal.best_maps_url
+                logger.debug(f"📍 Link resuelto via sucursal_id='{sucursal_id}': {link}")
+
+        if not link:
+            link = _safe_get(item, ["ubicacion_link"]) or None  # legacy
+
         if not link:
             continue
 
@@ -733,7 +755,6 @@ def _extract_location_link(
                 city_match_link = link
                 logger.info(f"📍 Location link resolved via user_city='{user_city}': {item_ubic_raw}")
 
-        # Fallback: first matching link
         if not best_link:
             best_link = link
 
@@ -2030,10 +2051,11 @@ async def _handle_message_fsm(
         if slots.interest:
             location_link = _extract_location_link(
                 inventory_service, slots.interest,
-                new_context.get("interest_ubicacion", ""),
-                new_context.get("user_city", ""),
+                locations_service=locations_service,
+                interest_ubicacion=new_context.get("interest_ubicacion", ""),
+                user_city=new_context.get("user_city", ""),
             )
-        # Fallback: use office override if inventory has no link
+        # Fallback: env var override → brand.yaml (handled by render_system_prompt)
         if not location_link and office_maps_url_override and office_maps_url_override.strip():
             location_link = office_maps_url_override.strip()
         if location_link:
@@ -2110,6 +2132,7 @@ async def handle_message(
     state: str,
     context: Dict[str, Any],
     campaign_service=None,
+    locations_service=None,
     office_maps_url_override: Optional[str] = None,
 ) -> Dict[str, Any]:
     user_message = user_message or ""
@@ -2433,6 +2456,7 @@ async def handle_message(
         user_name_context=saved_name if saved_name else "(Aún no dice su nombre)",
         turn_number=turn_count,
         office_maps_url_override=office_maps_url_override,
+        locations_service=locations_service,
     )
 
     # Smart context injection: only include inventory/financing when relevant
