@@ -410,7 +410,7 @@ def _normalize_fuel(raw: str) -> str:
     return raw.strip()[:30]
 
 
-def _build_inventory_text(inventory_service) -> str:
+def _build_inventory_text(inventory_service, locations_service=None) -> str:
     items = getattr(inventory_service, "items", None) or []
     if not items:
         return "Inventario no disponible."
@@ -532,10 +532,10 @@ def _build_inventory_text(inventory_service) -> str:
             else:
                 info += f" | Financiamiento: {financiamiento_raw}"
 
-        # Ubicación (dinámica desde el Sheet)
-        ubicacion = _safe_get(item, ["ubicacion", "Ubicacion", "ubicación"])
+        # Ubicación (derivada de sucursal_id → LocationsService)
+        ubicacion = _get_item_ubicacion(item, locations_service)
         if ubicacion:
-            ubicacion_link = _safe_get(item, ["ubicacion_link"])
+            ubicacion_link = _get_item_maps_url(item, locations_service)
             if ubicacion_link:
                 info += f" | Ubicación: {ubicacion} (Maps: {ubicacion_link})"
             else:
@@ -546,7 +546,7 @@ def _build_inventory_text(inventory_service) -> str:
     return "\n".join(lines)
 
 
-def _build_focused_inventory_text(inventory_service, last_interest: str) -> str:
+def _build_focused_inventory_text(inventory_service, last_interest: str, locations_service=None) -> str:
     """Build inventory text for only the model of interest (saves tokens)."""
     items = getattr(inventory_service, "items", None) or []
     if not items or not last_interest:
@@ -661,10 +661,10 @@ def _build_focused_inventory_text(inventory_service, last_interest: str) -> str:
             else:
                 info += f" | Financiamiento: {financiamiento_raw}"
 
-        # Ubicación (dinámica desde el Sheet)
-        ubicacion = _safe_get(item, ["ubicacion", "Ubicacion", "ubicación"])
+        # Ubicación (derivada de sucursal_id → LocationsService)
+        ubicacion = _get_item_ubicacion(item, locations_service)
         if ubicacion:
-            ubicacion_link = _safe_get(item, ["ubicacion_link"])
+            ubicacion_link = _get_item_maps_url(item, locations_service)
             if ubicacion_link:
                 info += f" | Ubicación: {ubicacion} (Maps: {ubicacion_link})"
             else:
@@ -683,6 +683,30 @@ def _extract_photos_from_item(item: Dict[str, Any]) -> List[str]:
     import re as _re
     parts = _re.split(r"[|\n,]+", raw)
     return [u.strip() for u in parts if u.strip().startswith("http")]
+
+
+def _get_item_ubicacion(item: Dict[str, Any], locations_service=None) -> str:
+    """Returns city/location text for an inventory item.
+    Resolves via sucursal_id → LocationsService first; falls back to legacy 'ubicacion' column.
+    """
+    sucursal_id = _safe_get(item, ["sucursal_id"])
+    if sucursal_id and locations_service:
+        sucursal = locations_service.get(sucursal_id)
+        if sucursal:
+            return f"{sucursal.ciudad}, {sucursal.estado}" if sucursal.estado else sucursal.ciudad
+    return _safe_get(item, ["ubicacion", "Ubicacion", "ubicación"])
+
+
+def _get_item_maps_url(item: Dict[str, Any], locations_service=None) -> str:
+    """Returns maps URL for an inventory item.
+    Resolves via sucursal_id → LocationsService first; falls back to legacy 'ubicacion_link' column.
+    """
+    sucursal_id = _safe_get(item, ["sucursal_id"])
+    if sucursal_id and locations_service:
+        sucursal = locations_service.get(sucursal_id)
+        if sucursal and sucursal.best_maps_url:
+            return sucursal.best_maps_url
+    return _safe_get(item, ["ubicacion_link"])
 
 
 def _extract_location_link(
@@ -735,12 +759,12 @@ def _extract_location_link(
                 logger.debug(f"📍 Link resuelto via sucursal_id='{sucursal_id}': {link}")
 
         if not link:
-            link = _safe_get(item, ["ubicacion_link"]) or None  # legacy
+            link = _safe_get(item, ["ubicacion_link"]) or None  # legacy column (transition)
 
         if not link:
             continue
 
-        item_ubic_raw = _safe_get(item, ["ubicacion", "Ubicacion", "ubicación"])
+        item_ubic_raw = _get_item_ubicacion(item, locations_service)
         item_ubic = _strip_accents(_normalize_spanish(item_ubic_raw))
 
         # Priority 1: explicit interest_ubicacion match → return immediately
@@ -762,7 +786,7 @@ def _extract_location_link(
 
 
 def _detect_vehicle_ubicacion(
-    user_message: str, inventory_service, last_interest: str
+    user_message: str, inventory_service, last_interest: str, locations_service=None
 ) -> Optional[str]:
     """Detect if the user mentions a location that matches a specific inventory
     item's ubicacion for the model of interest.
@@ -792,7 +816,7 @@ def _detect_vehicle_ubicacion(
         modelo_norm = _normalize_spanish(modelo)
         if not any(tok in modelo_norm for tok in interest_tokens):
             continue
-        ubic = _safe_get(item, ["ubicacion", "Ubicacion", "ubicación"]).strip()
+        ubic = _get_item_ubicacion(item, locations_service).strip()
         if ubic:
             model_ubicaciones.append(ubic)
 
@@ -1311,6 +1335,7 @@ def _pick_media_urls(
     inventory_service,
     context: Dict[str, Any],
     fsm_requested: bool = False,
+    locations_service=None,
 ) -> List[str]:
     """
     Devuelve lista de URLs de fotos según el modelo detectado.
@@ -1369,7 +1394,7 @@ def _pick_media_urls(
     user_city = _normalize_spanish((context.get("user_city") or "").strip())
 
     def _prefer_unit_item(candidates: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        """Among matching items, prefer the one whose ubicacion matches the unit of interest.
+        """Among matching items, prefer the one whose location matches the unit of interest.
         Priority: 1) explicit interest_ubicacion, 2) user_city slot, 3) first item.
         """
         if not candidates:
@@ -1378,18 +1403,18 @@ def _pick_media_urls(
         if interest_ubicacion:
             interest_ubic_clean = _strip_accents(_normalize_spanish(interest_ubicacion))
             for c in candidates:
-                ubic = _strip_accents(_normalize_spanish(_safe_get(c, ["ubicacion", "Ubicacion", "ubicación"])))
+                ubic = _strip_accents(_normalize_spanish(_get_item_ubicacion(c, locations_service)))
                 if interest_ubic_clean in ubic or ubic in interest_ubic_clean:
                     return c
         # Priority 2: user_city slot (CIUDAD captured during campaign registration)
         if user_city and len(candidates) > 1:
             user_city_clean = _strip_accents(_normalize_spanish(user_city))
             for c in candidates:
-                ubic = _strip_accents(_normalize_spanish(_safe_get(c, ["ubicacion", "Ubicacion", "ubicación"])))
+                ubic = _strip_accents(_normalize_spanish(_get_item_ubicacion(c, locations_service)))
                 if user_city_clean in ubic or ubic in user_city_clean:
-                    logger.info(f"📸 Unit resolved via user_city='{user_city}': ubicacion='{_safe_get(c, ['ubicacion'])}'")
+                    logger.info(f"📸 Unit resolved via user_city='{user_city}': ubicacion='{_get_item_ubicacion(c, locations_service)}'")
                     return c
-        return candidates[0]  # fallback to first if no ubicacion match
+        return candidates[0]  # fallback to first if no location match
 
     # 4) Detectar qué modelo quiere ver
     target_item = None
@@ -1454,7 +1479,7 @@ def _pick_media_urls(
 
             # Unit location bonus: prefer items matching the vehicle ubicacion of interest
             if score > 0 and interest_ubicacion:
-                ubic = _strip_accents(_normalize_spanish(_safe_get(item, ["ubicacion", "Ubicacion", "ubicación"])))
+                ubic = _strip_accents(_normalize_spanish(_get_item_ubicacion(item, locations_service)))
                 interest_ubic_clean = _strip_accents(_normalize_spanish(interest_ubicacion))
                 if interest_ubic_clean in ubic or ubic in interest_ubic_clean:
                     score += 0.5  # Small bonus to prefer location match without overriding model match
@@ -1487,12 +1512,12 @@ def _pick_media_urls(
 
     # 5) Extraer fotos
     urls = _extract_photos_from_item(target_item)
-    item_ubic = _safe_get(target_item, ["ubicacion", "Ubicacion", "ubicación"])
+    item_ubic = _get_item_ubicacion(target_item, locations_service)
     logger.info(f"📸 Fotos seleccionadas: modelo='{target_model_name}', {len(urls)} URLs, last_interest='{last_interest}', ubicacion='{item_ubic}'")
     if not urls:
         return []
 
-    # Lock in this unit's ubicacion so subsequent ask_location uses the same item.
+    # Lock in this unit's location so subsequent ask_location uses the same item.
     # Only set if not already pinned by an explicit user mention (explicit_user wins).
     _current_src = context.get("interest_ubicacion_source")
     if item_ubic and _current_src != "explicit_user":
@@ -1880,7 +1905,7 @@ async def _handle_message_fsm(
     # Detect vehicle ubicacion from user message (e.g. "Cascadia de León" or "no, la de Querétaro")
     # Explicit user mention ALWAYS overrides any previous inference (photo_lock, user_city_hint)
     _interest = slots_data.get("interest") or context.get("last_interest", "")
-    _vehicle_ubic = _detect_vehicle_ubicacion(user_message, inventory_service, _interest)
+    _vehicle_ubic = _detect_vehicle_ubicacion(user_message, inventory_service, _interest, locations_service=locations_service)
     if _vehicle_ubic:
         _prev_ubic = context.get("interest_ubicacion")
         context["interest_ubicacion"] = _vehicle_ubic
@@ -1914,9 +1939,9 @@ async def _handle_message_fsm(
     # Build inventory text (focused on campaign vehicle)
     inventory_text = ""
     if slots.interest:
-        inventory_text = _build_focused_inventory_text(inventory_service, slots.interest) or ""
+        inventory_text = _build_focused_inventory_text(inventory_service, slots.interest, locations_service=locations_service) or ""
     if not inventory_text:
-        inventory_text = _build_inventory_text(inventory_service) or ""
+        inventory_text = _build_inventory_text(inventory_service, locations_service=locations_service) or ""
 
     # Build the focused writer prompt
     campaign_instructions = campaign.instructions if campaign else ""
@@ -2064,7 +2089,7 @@ async def _handle_message_fsm(
     # Photo selection (reuse existing logic)
     media_urls: List[str] = []
     if action == Action.SEND_PHOTOS:
-        media_urls = _pick_media_urls(user_message, reply_clean, inventory_service, new_context, fsm_requested=True)
+        media_urls = _pick_media_urls(user_message, reply_clean, inventory_service, new_context, fsm_requested=True, locations_service=locations_service)
 
     # PDF detection
     _bases_url = campaign.bases_pdf_url if campaign else None
@@ -2628,17 +2653,17 @@ async def handle_message(
         # unrelated models or standard prices that don't apply to the campaign.
         # NOTE: For organic keyword matches, we KEEP full inventory because the client
         # may not want the campaign — they might want a regular unit from inventory.
-        focused = _build_focused_inventory_text(inventory_service, last_interest) if last_interest else ""
+        focused = _build_focused_inventory_text(inventory_service, last_interest, locations_service=locations_service) if last_interest else ""
         inventory_section = f"{focused}\n" if focused else ""
     elif _needs_inventory_context(user_message, turn_count, last_interest, inventory_service):
-        inventory_text = _build_inventory_text(inventory_service)
+        inventory_text = _build_inventory_text(inventory_service, locations_service=locations_service)
         inventory_section = (
             "INVENTARIO DISPONIBLE (CATÁLOGO COMPLETO - estas son TODAS las marcas y modelos "
             "que Tractos y Max vende actualmente; si aparece aquí, lo vendemos):\n"
             f"{inventory_text}\n"
         )
     elif last_interest:
-        focused = _build_focused_inventory_text(inventory_service, last_interest)
+        focused = _build_focused_inventory_text(inventory_service, last_interest, locations_service=locations_service)
         inventory_section = f"{focused}\n" if focused else ""
     else:
         inventory_section = ""
@@ -3035,7 +3060,7 @@ async def handle_message(
     }
 
     # Detect vehicle ubicacion in legacy path too — explicit user mention always wins
-    _vehicle_ubic = _detect_vehicle_ubicacion(user_message, inventory_service, last_interest)
+    _vehicle_ubic = _detect_vehicle_ubicacion(user_message, inventory_service, last_interest, locations_service=locations_service)
     if _vehicle_ubic:
         _prev_ubic_legacy = new_context.get("interest_ubicacion")
         new_context["interest_ubicacion"] = _vehicle_ubic
@@ -3047,7 +3072,7 @@ async def handle_message(
             logger.info(f"📸 Photo carousel reset (legacy): unit changed '{_prev_ubic_legacy}' → '{_vehicle_ubic}'")
 
     # Pasamos new_context (la función lo modificará)
-    media_urls = _pick_media_urls(user_message, reply_clean, inventory_service, new_context)
+    media_urls = _pick_media_urls(user_message, reply_clean, inventory_service, new_context, locations_service=locations_service)
     reply_clean = _sanitize_reply_if_photos_attached(reply_clean, media_urls)
 
     # Si el bot prometió fotos pero no se encontraron, corregir la respuesta
