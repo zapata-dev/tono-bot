@@ -94,6 +94,7 @@ OPENAI_FALLBACK_MODEL="gpt-4o-mini"    # Fallback model name (OpenAI)
 EVO_INSTANCE="Maximo Cervantes 2"     # WhatsApp instance name
 OWNER_PHONE=""                         # Owner's phone for alerts
 MESSAGE_ACCUMULATION_SECONDS=8.0       # Debounce window for rapid messages
+OFFICE_MAPS_URL=""                     # Google Maps URL del negocio — sobreescribe brand.yaml (actualizar sin redesplegar)
 
 # --- Data Sources ---
 SHEET_CSV_URL=""                       # Google Sheets CSV URL for inventory

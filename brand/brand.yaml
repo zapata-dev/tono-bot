@@ -19,13 +19,73 @@ bot:
 
 business:
   office_label: "Tlalnepantla, Edo Mex"
-  office_full_address: "Camiones del Valle Tlalnepantla"
-  office_maps_url: "https://maps.app.goo.gl/v9KigGY3QVAxqwV17"
+  office_full_address: "Zapata Camiones Tlalnepantla"
+  office_sucursal_id: "zapata_tlalnepantla"  # sucursal principal/fallback
+  office_maps_url: "https://maps.app.goo.gl/1Jjixt8HKDrprWeQ7"
   timezone: "America/Mexico_City"
   hours_weekdays: "Lunes a Viernes 9:00 a 18:00"
   hours_saturday: "Sábados 9:00 a 14:00"
   hours_sunday: "cerrado"
   closed_days: ["sunday"]
+
+# =========================================================================
+# SUCURSALES — Fuente de verdad para ubicaciones y links de Google Maps
+#
+# Prioridad: Google Sheets (SUCURSALES_CSV_URL) → este YAML (fallback local)
+# Para agregar/quitar sucursales sin deploy: usa la pestaña "Sucursales" en
+# el Google Sheet del inventario y configura SUCURSALES_CSV_URL en Cloud Run.
+#
+# Campos:
+#   sucursal_id    : clave única snake_case (usada en columna sucursal_id del inventario)
+#   nombre_display : nombre que verá el cliente en WhatsApp
+#   ciudad / estado: para contexto del bot
+#   maps_url       : URL canónica de Google Maps (preferida, permanente)
+#   maps_url_short : link corto maps.app.goo.gl (respaldo)
+#   activa         : true/false — false = bot ignora la sucursal sin borrar historial
+#
+# PARA CAMBIAR UN LINK: edita maps_url o maps_url_short y haz deploy.
+# Con Google Sheets configurado: edita la celda en la pestaña Sucursales, sin deploy.
+# =========================================================================
+sucursales:
+  - sucursal_id: "zapata_guadalajara"
+    nombre_display: "Zapata Camiones Guadalajara"
+    ciudad: "Guadalajara"
+    estado: "Jalisco"
+    maps_url: ""
+    maps_url_short: "https://maps.app.goo.gl/MY6oMWcFpffVL5KV8"
+    activa: true
+
+  - sucursal_id: "zapata_leon"
+    nombre_display: "Zapata Camiones León"
+    ciudad: "León"
+    estado: "Guanajuato"
+    maps_url: ""
+    maps_url_short: "https://maps.app.goo.gl/2irBEbHeifECVLSF6"
+    activa: true
+
+  - sucursal_id: "zapata_queretaro"
+    nombre_display: "Zapata Camiones Querétaro"
+    ciudad: "Querétaro"
+    estado: "Querétaro"
+    maps_url: ""
+    maps_url_short: "https://maps.app.goo.gl/NmqBHbrFmmTq3K9TA"
+    activa: true
+
+  - sucursal_id: "zapata_tlalnepantla"
+    nombre_display: "Zapata Camiones Tlalnepantla"
+    ciudad: "Tlalnepantla"
+    estado: "Estado de México"
+    maps_url: ""
+    maps_url_short: "https://maps.app.goo.gl/1Jjixt8HKDrprWeQ7"
+    activa: true
+
+  - sucursal_id: "goon_cuautitlan"
+    nombre_display: "GOon Camiones Cuautitlán"
+    ciudad: "Cuautitlán"
+    estado: "Estado de México"
+    maps_url: ""
+    maps_url_short: "https://maps.app.goo.gl/1dV7rkBE2t12mxz38"
+    activa: true
 
 whatsapp:
   instance_name: "Maximo Cervantes 2"

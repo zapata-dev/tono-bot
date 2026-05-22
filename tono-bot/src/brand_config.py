@@ -60,6 +60,7 @@ def get_brand_config() -> Dict[str, Any]:
         "prompt_template": prompt_template,
         "inventory_path": str(inventory_csv) if inventory_csv.exists() else None,
         "financing_path": str(financing_json) if financing_json.exists() else None,
+        "sucursales": brand_data.get("sucursales", []),
     }
 
     logger.info(
@@ -71,11 +72,51 @@ def get_brand_config() -> Dict[str, Any]:
     return cfg
 
 
-def render_system_prompt(**runtime_vars) -> str:
+def _build_sucursales_context(locations_service=None) -> str:
+    """
+    Genera el bloque de texto de sucursales para inyectar en el system prompt.
+    Usa LocationsService si está disponible (tiene los datos más frescos del Sheet),
+    si no, cae al brand.yaml.
+    """
+    sucursales = []
+    if locations_service is not None:
+        sucursales = locations_service.all_active()
+    else:
+        # Fallback: construir desde brand.yaml (sin LocationsService)
+        for s in get_brand_config().get("sucursales", []):
+            if str(s.get("activa", "true")).upper() not in ("FALSE", "NO", "0"):
+                sucursales.append(type("S", (), {
+                    "sucursal_id": s.get("sucursal_id", ""),
+                    "nombre_display": s.get("nombre_display", ""),
+                    "ciudad": s.get("ciudad", ""),
+                    "best_maps_url": s.get("maps_url") or s.get("maps_url_short", ""),
+                })())
+
+    if not sucursales:
+        return "(sin datos de sucursales)"
+
+    lines = []
+    for s in sucursales:
+        url = s.best_maps_url if hasattr(s, "best_maps_url") else (s.get("maps_url") or s.get("maps_url_short", ""))
+        ciudad = s.ciudad if hasattr(s, "ciudad") else s.get("ciudad", "")
+        nombre = s.nombre_display if hasattr(s, "nombre_display") else s.get("nombre_display", "")
+        sid = s.sucursal_id if hasattr(s, "sucursal_id") else s.get("sucursal_id", "")
+        line = f"- {sid}: {nombre} ({ciudad})"
+        if url:
+            line += f" → {url}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def render_system_prompt(
+    office_maps_url_override: str = None,
+    locations_service=None,
+    **runtime_vars,
+) -> str:
     """
     Renderiza el system prompt con valores de marca + valores de runtime.
-    Runtime vars (current_time_str, user_name_context, etc.) se pasan
-    desde conversation_logic.py en cada turno.
+    office_maps_url_override: env var OFFICE_MAPS_URL, sobreescribe brand.yaml.
+    locations_service: inyecta datos frescos de sucursales al prompt.
     """
     cfg = get_brand_config()
     if not cfg["prompt_template"]:
@@ -83,14 +124,20 @@ def render_system_prompt(**runtime_vars) -> str:
             f"brand/prompt.md not found at {BRAND_DIR / 'prompt.md'}. "
             "Create it from the SYSTEM_PROMPT template."
         )
+    effective_maps_url = (
+        office_maps_url_override.strip()
+        if office_maps_url_override and office_maps_url_override.strip()
+        else cfg["business"]["office_maps_url"]
+    )
     all_vars = {
         "brand_name": cfg["brand"]["name"],
         "persona_name": cfg["bot"]["persona_name"],
         "office_label": cfg["business"]["office_label"],
         "office_full_address": cfg["business"]["office_full_address"],
-        "office_maps_url": cfg["business"]["office_maps_url"],
+        "office_maps_url": effective_maps_url,
         "hours_weekdays": cfg["business"]["hours_weekdays"],
         "hours_saturday": cfg["business"]["hours_saturday"],
+        "sucursales_context": _build_sucursales_context(locations_service),
         **runtime_vars,
     }
     try:
@@ -124,3 +171,8 @@ def get_financing_path() -> str:
     if not path:
         raise RuntimeError("No financing.json in brand/")
     return path
+
+
+def get_sucursales_fallback() -> list:
+    """Devuelve la lista de sucursales del brand.yaml (fallback cuando no hay Sheet)."""
+    return get_brand_config().get("sucursales", [])

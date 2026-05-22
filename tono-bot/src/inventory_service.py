@@ -75,6 +75,7 @@ class InventoryService:
                 "moneda": row.get("moneda", ""),
                 "iva_incluido": row.get("iva_incluido", ""),
                 "garantia_texto": row.get("garantia_texto", ""),
+                "sucursal_id": row.get("sucursal_id", ""),
                 "ubicacion": row.get("ubicacion", ""),
                 "ubicacion_link": row.get("ubicacion_link", ""),
                 "descripcion_corta": row.get("descripcion_corta", ""),
