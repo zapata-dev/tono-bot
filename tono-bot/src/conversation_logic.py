@@ -104,24 +104,73 @@ def _load_financing_data() -> Dict[str, Any]:
     return _FINANCING_DATA
 
 
-def _build_financing_text() -> str:
-    """Build financing info text for GPT context."""
+_FINANCING_BRAND_STRIP = {"foton", "freightliner", "kenworth", "international", "auman", "dina", "isuzu"}
+
+
+def _financing_model_tokens(name: str) -> frozenset:
+    """Normalize a vehicle name to a frozenset of comparable tokens for inventory matching."""
+    s = name.lower()
+    for brand in _FINANCING_BRAND_STRIP:
+        s = s.replace(brand, " ")
+    # Remove punctuation/parentheses, keep alphanumeric and dots
+    s = re.sub(r"[^a-z0-9.\s]", " ", s)
+    return frozenset(t for t in s.split() if len(t) >= 2)
+
+
+def _build_active_inventory_keys(inventory_service) -> set:
+    """Return a set of (model_tokens_frozenset, year_str) for all active inventory items."""
+    active = set()
+    if not inventory_service or not inventory_service.items:
+        return active
+    for item in inventory_service.items:
+        modelo = (item.get("Modelo", "") or "").lower()
+        anio = str(item.get("Año", "") or "").strip()
+        if not modelo or not anio:
+            continue
+        tokens = _financing_model_tokens(modelo)
+        if tokens:
+            active.add((tokens, anio))
+    return active
+
+
+def _financing_entry_in_inventory(nombre: str, anio: int, active_keys: set) -> bool:
+    """Return True if this financing entry matches at least one active inventory item."""
+    fin_tokens = _financing_model_tokens(nombre)
+    fin_year = str(anio)
+    for inv_tokens, inv_year in active_keys:
+        if inv_year != fin_year:
+            continue
+        if fin_tokens & inv_tokens:  # at least one token in common
+            return True
+    return False
+
+
+def _build_financing_text(inventory_service=None) -> str:
+    """Build financing info text for GPT context, filtered to active inventory only."""
     data = _load_financing_data()
     if not data:
         return "Corridas de financiamiento no disponibles."
+
+    # Build active inventory key set for filtering; if no inventory_service, skip filter
+    active_keys = _build_active_inventory_keys(inventory_service)
 
     lines = ["CORRIDAS FINANCIERAS (Banorte - Ilustrativas):"]
     lines.append("Enganche mínimo: 20% | Plazo base: 48 meses | Mensualidades YA incluyen intereses y seguros\n")
 
     for key, info in data.items():
         nombre = info.get("nombre", "")
-        anio = info.get("anio", "")
+        anio = info.get("anio", 0)
         transmision = info.get("transmision", "")
         valor = info.get("valor_factura", 0)
         enganche = info.get("enganche_min", 0)
         mensualidad = info.get("pago_mensual_total_mes_1", 0)
         tasa = info.get("tasa_anual_pct", 0)
         cat = info.get("cat_sin_iva_pct", 0)
+
+        # Filter: only include if vehicle is in the active inventory
+        if active_keys and not _financing_entry_in_inventory(nombre, anio, active_keys):
+            logger.debug(f"⚙️ Financing entry '{key}' excluded — not in active inventory")
+            continue
 
         trans_text = f" ({transmision})" if transmision else ""
         lines.append(
@@ -2669,7 +2718,7 @@ async def handle_message(
         inventory_section = ""
 
     if _needs_financing_context(user_message):
-        financing_text = _build_financing_text()
+        financing_text = _build_financing_text(inventory_service)
         financing_section = f"{financing_text}\n" if financing_text else ""
     else:
         financing_section = ""
