@@ -184,7 +184,7 @@ def _build_financing_text(inventory_service=None) -> str:
     return "\n".join(lines)
 
 
-def _detect_pdf_request(user_message: str, last_interest: str, context: Dict[str, Any] = None, bases_pdf_url: str = None) -> Optional[Dict[str, Any]]:
+def _detect_pdf_request(user_message: str, last_interest: str, context: Dict[str, Any] = None, bases_pdf_url: str = None, last_bot_message: str = "") -> Optional[Dict[str, Any]]:
     """
     Detecta si el usuario pide un PDF (ficha técnica, corrida, o bases de campaña).
     Retorna dict con: tipo, pdf_url, filename, mensaje_previo
@@ -278,6 +278,27 @@ def _detect_pdf_request(user_message: str, last_interest: str, context: Dict[str
             if last_pdf_type and has_action_verb:
                 pdf_type = last_pdf_type
                 logger.info(f"📄 Petición genérica '{msg}' continuando PDF previo: {pdf_type}")
+
+    # 4) Confirmación de oferta previa del bot ("Si porfavor" tras "¿te comparto la ficha?")
+    if not pdf_type and last_bot_message:
+        _affirmative_words = {"si", "sí", "dale", "claro", "ok", "listo", "bueno",
+                              "porfa", "porfavor", "perfecto", "andale", "ándale", "yes"}
+        _msg_words = set(msg.strip().split())
+        _is_short_affirmative = len(msg.strip()) <= 30 and bool(_msg_words & _affirmative_words)
+        if _is_short_affirmative:
+            _bot_lower = last_bot_message.lower()
+            _ficha_offer = ["ficha", "ficha tecnica", "ficha técnica", "hoja tecnica", "specs"]
+            _corrida_offer = ["corrida", "simulacion", "simulación"]
+            if any(kw in _bot_lower for kw in _ficha_offer):
+                pdf_type = "ficha"
+                logger.info(f"📄 Confirmación de oferta de ficha detectada: msg='{msg}'")
+            elif any(kw in _bot_lower for kw in _corrida_offer):
+                pdf_type = "corrida"
+                logger.info(f"📄 Confirmación de oferta de corrida detectada: msg='{msg}'")
+            elif "pdf" in _bot_lower:
+                # Bot mencionó PDF genérico → asumir ficha como default
+                pdf_type = "ficha"
+                logger.info(f"📄 Confirmación de oferta genérica de PDF: msg='{msg}'")
 
     if not pdf_type:
         return None
@@ -604,8 +625,7 @@ def _build_focused_inventory_text(inventory_service, last_interest: str, locatio
     interest_norm = _normalize_spanish(last_interest)
     interest_tokens = [t for t in interest_norm.split() if len(t) >= 2 and t not in {"foton", "freightliner", "kenworth", "international", "camion", "camión"}]
 
-    # Detect year tokens (e.g. "2023", "2024") in the interest string
-    year_tokens = [t for t in interest_tokens if re.fullmatch(r"20\d{2}", t)]
+    # Excluir años del match de modelo (mostramos todos los años disponibles del mismo modelo)
     model_tokens = [t for t in interest_tokens if not re.fullmatch(r"20\d{2}", t)]
 
     matched_infos: list[str] = []
@@ -617,10 +637,7 @@ def _build_focused_inventory_text(inventory_service, last_interest: str, locatio
         # Must match at least one model token (non-year)
         if not model_tokens or not any(tok in modelo_norm for tok in model_tokens):
             continue
-        # If a year was specified in the interest, filter by year too
         anio = _safe_get(item, ["Anio", "Año", "anio"], default="")
-        if year_tokens and anio and not any(yt == anio.strip() for yt in year_tokens):
-            continue
 
         precio = _safe_get(item, ["Precio", "precio"], default="N/D")
         moneda = _safe_get(item, ["moneda"], default="MXN")
@@ -2142,7 +2159,11 @@ async def _handle_message_fsm(
 
     # PDF detection
     _bases_url = campaign.bases_pdf_url if campaign else None
-    pdf_info = _detect_pdf_request(user_message, slots.interest or "", new_context, bases_pdf_url=_bases_url)
+    _last_bot_msg_fsm = next(
+        (line[3:] for line in reversed((history or "").split("\n")) if line.startswith("A: ")),
+        ""
+    )
+    pdf_info = _detect_pdf_request(user_message, slots.interest or "", new_context, bases_pdf_url=_bases_url, last_bot_message=_last_bot_msg_fsm)
     if pdf_info:
         if pdf_info.get("pdf_url"):
             reply_clean = pdf_info.get("mensaje", reply_clean)
@@ -3219,7 +3240,11 @@ async def handle_message(
     # PDF DETECTION (FICHA TÉCNICA / CORRIDA)
     # ============================================================
     _bases_url_legacy = _matched_campaign.bases_pdf_url if _matched_campaign else None
-    pdf_info = _detect_pdf_request(user_message, last_interest, new_context, bases_pdf_url=_bases_url_legacy)
+    _last_bot_msg_legacy = next(
+        (line[3:] for line in reversed(history.split("\n")) if line.startswith("A: ")),
+        ""
+    )
+    pdf_info = _detect_pdf_request(user_message, last_interest, new_context, bases_pdf_url=_bases_url_legacy, last_bot_message=_last_bot_msg_legacy)
     if pdf_info:
         # Guardar tipo de PDF solicitado para peticiones genéricas posteriores
         if pdf_info.get("tipo"):
