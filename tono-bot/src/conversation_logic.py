@@ -1289,16 +1289,43 @@ def _extract_interest_from_messages(user_message: str, reply: str, inventory_ser
     return None
 
 
-def _extract_appointment_from_text(text: str) -> Optional[str]:
-    """Basic Spanish appointment extractor for day/time."""
+def _extract_appointment_from_text(text: str, now_dt=None) -> Optional[str]:
+    """Basic Spanish appointment extractor for day/time.
+
+    When now_dt (datetime, Mexico City tz) is provided, relative references like
+    'mañana', 'pasado mañana', 'hoy' are resolved to their actual weekday name so
+    that weekend-hour rules in the prompt can fire correctly.
+    """
+    from datetime import timedelta
+
+    _DIAS_ES = {0: "Lunes", 1: "Martes", 2: "Miércoles",
+                3: "Jueves", 4: "Viernes", 5: "Sábado", 6: "Domingo"}
+
     t = (text or "").strip().lower()
     if not t:
         return None
 
     day: Optional[str] = None
-    if "mañana" in t:
-        day = "Mañana"
+
+    # --- Relative day resolution (requires now_dt) ---
+    if now_dt:
+        if "pasado mañana" in t or "pasado manana" in t:
+            day = _DIAS_ES[(now_dt + timedelta(days=2)).weekday()]
+        elif "mañana" in t or "manana" in t:
+            day = _DIAS_ES[(now_dt + timedelta(days=1)).weekday()]
+        elif "hoy" in t or "ahorita" in t or "ya mismo" in t:
+            day = _DIAS_ES[now_dt.weekday()]
     else:
+        # Fallback when no reference date — keep abstract labels
+        if "pasado mañana" in t or "pasado manana" in t:
+            day = "Pasado mañana"
+        elif "mañana" in t or "manana" in t:
+            day = "Mañana"
+        elif "hoy" in t or "ahorita" in t or "ya mismo" in t:
+            day = "Hoy"
+
+    # --- Explicit weekday names ---
+    if not day:
         days = ["lunes", "martes", "miércoles", "miercoles", "jueves", "viernes", "sábado", "sabado", "domingo"]
         for d in days:
             if d in t:
@@ -2254,6 +2281,9 @@ async def handle_message(
             "lead_info": None,
         }
 
+    # Current time (Mexico City) — needed early for relative appointment resolution
+    now_dt, current_time_str = get_mexico_time()
+
     # Persistent context
     saved_name = (context.get("user_name") or "").strip()
     last_interest = (context.get("last_interest") or "").strip()
@@ -2313,7 +2343,7 @@ async def handle_message(
     if extracted_payment:
         last_payment = extracted_payment
 
-    extracted_appt = _extract_appointment_from_text(user_message)
+    extracted_appt = _extract_appointment_from_text(user_message, now_dt=now_dt)
     if extracted_appt:
         last_appointment = extracted_appt
 
@@ -2471,7 +2501,7 @@ async def handle_message(
     if extracted_payment:
         _new_extracted_data["payment"] = extracted_payment
     if extracted_appt:
-        _new_extracted_data["appointment"] = extracted_appt
+        _new_extracted_data["appointment"] = extracted_appt  # already resolved via now_dt at extraction time
 
     # ============================================================
     # UNIVERSAL FSM: Run for ALL conversations (decisions only)
@@ -2531,8 +2561,7 @@ async def handle_message(
     except Exception as _fsm_err:
         logger.error(f"⚠️ FSM universal falló (legacy continúa sin FSM): {_fsm_err}")
 
-    # Time and date
-    now_dt, current_time_str = get_mexico_time()
+    # Time and date (now_dt already computed above for appointment resolution)
     # Formatear fecha en español manualmente (el servidor tiene locale inglés)
     meses_es = {
         1: "enero", 2: "febrero", 3: "marzo", 4: "abril",
