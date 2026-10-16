@@ -413,13 +413,15 @@ def _safe_get(item: Dict[str, Any], keys: List[str], default: str = "") -> str:
 
 def _format_price(precio: str, moneda: str, iva: str) -> str:
     """Precio limpio: '$499,000 MXN IVA incluido'."""
+    if not precio or not str(precio).strip():
+        return "Precio por confirmar con un asesor"
     try:
         num = float(precio.replace(",", "").replace(" ", ""))
         formatted = f"${num:,.0f}"
     except (ValueError, AttributeError):
-        formatted = f"${precio}" if precio else "Consultar"
+        return "Precio por confirmar con un asesor"
     cur = moneda if moneda else "MXN"
-    iva_txt = " IVA incluido" if iva and iva.upper() == "TRUE" else ""
+    iva_txt = " IVA incluido" if iva and iva.strip().upper() in ("TRUE", "VERDADERO", "SI", "SÍ", "1") else ""
     return f"{formatted} {cur}{iva_txt}"
 
 
@@ -490,7 +492,7 @@ def _build_inventory_text(inventory_service, locations_service=None) -> str:
         marca = _safe_get(item, ["Marca", "marca"])
         modelo = _safe_get(item, ["Modelo", "modelo", "id_modelo"], default="(sin modelo)")
         anio = _safe_get(item, ["Anio", "Año", "anio"], default="")
-        precio = _safe_get(item, ["Precio", "precio"], default="N/D")
+        precio = _safe_get(item, ["Precio", "precio"], default="")
         moneda = _safe_get(item, ["moneda"], default="MXN")
         iva = _safe_get(item, ["iva_incluido"], default="")
         cantidad = _safe_get(item, ["Cantidad", "cantidad"], default="1")
@@ -595,9 +597,9 @@ def _build_inventory_text(inventory_service, locations_service=None) -> str:
         financiamiento_raw = _safe_get(item, ["Financiamiento", "financiamiento"])
         if financiamiento_raw:
             fin_lower = str(financiamiento_raw).strip().lower()
-            if fin_lower in ("false", "no", "no aplica", "solo contado", "sin credito"):
+            if fin_lower in ("false", "falso", "0", "no", "no aplica", "solo contado", "sin credito"):
                 info += " | Financiamiento: No"
-            elif fin_lower in ("true", "si", "sí"):
+            elif fin_lower in ("true", "verdadero", "1", "si", "sí"):
                 info += " | Financiamiento: Sí"
             else:
                 info += f" | Financiamiento: {financiamiento_raw}"
@@ -639,7 +641,7 @@ def _build_focused_inventory_text(inventory_service, last_interest: str, locatio
             continue
         anio = _safe_get(item, ["Anio", "Año", "anio"], default="")
 
-        precio = _safe_get(item, ["Precio", "precio"], default="N/D")
+        precio = _safe_get(item, ["Precio", "precio"], default="")
         moneda = _safe_get(item, ["moneda"], default="MXN")
         iva = _safe_get(item, ["iva_incluido"], default="")
         marca = _safe_get(item, ["Marca", "marca"])
@@ -720,9 +722,9 @@ def _build_focused_inventory_text(inventory_service, last_interest: str, locatio
         financiamiento_raw = _safe_get(item, ["Financiamiento", "financiamiento"])
         if financiamiento_raw:
             fin_lower = str(financiamiento_raw).strip().lower()
-            if fin_lower in ("false", "no", "no aplica", "solo contado", "sin credito"):
+            if fin_lower in ("false", "falso", "0", "no", "no aplica", "solo contado", "sin credito"):
                 info += " | Financiamiento: No"
-            elif fin_lower in ("true", "si", "sí"):
+            elif fin_lower in ("true", "verdadero", "1", "si", "sí"):
                 info += " | Financiamiento: Sí"
             else:
                 info += f" | Financiamiento: {financiamiento_raw}"
