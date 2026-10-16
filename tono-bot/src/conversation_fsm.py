@@ -528,6 +528,11 @@ def _extract_appointment(text: str) -> Optional[str]:
                 day = d.capitalize().replace("Miercoles", "Miércoles").replace("Sabado", "Sábado")
                 break
 
+    # Domingo: la agencia está cerrada. No llenar el slot de cita para que no
+    # se marque "Cita Programada" ni se notifique al equipo.
+    if day == "Domingo":
+        return None
+
     time_str: Optional[str] = None
     if "medio dia" in t or "mediodía" in t or "medio día" in t:
         time_str = "12:00"
@@ -1420,6 +1425,9 @@ def validate_legacy_value(slot: str, value: Optional[str]) -> Optional[str]:
                      "sábado", "sabado", "domingo", "mañana", "hoy"}
         time_pattern = re.search(r'\d{1,2}[:hH]\d{0,2}|\d{1,2}\s*(am|pm)|medio\s*d[ií]a|tarde|mañana|noche', v_lower)
         has_day = any(d in v_lower for d in day_words)
+        if "domingo" in v_lower:
+            logger.info(f"🛡️ Appointment rejected (domingo, cerrado): {v}")
+            return None
         if not has_day and not time_pattern:
             logger.info(f"🛡️ Legacy appointment rejected (no day/time): {v}")
             return None
