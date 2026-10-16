@@ -504,6 +504,9 @@ def _build_inventory_text(inventory_service, locations_service=None) -> str:
         price_str = _format_price(precio, moneda, iva)
         label = f"{marca} {modelo}".strip() if marca else modelo
         info = f"- {label} {anio}: {price_str}"
+        color_unit = _safe_get(item, ["Color", "color"])
+        if color_unit:
+            info += f" | Color: {color_unit}"
 
         if condicion and condicion.strip().lower() == "demo":
             info += " [DEMO]"
@@ -650,6 +653,9 @@ def _build_focused_inventory_text(inventory_service, last_interest: str, locatio
         price_str = _format_price(precio, moneda, iva)
         label = f"{marca} {modelo}".strip() if marca else modelo
         info = f"Modelo de interés: {label} {anio}: {price_str}"
+        color_unit = _safe_get(item, ["Color", "color"])
+        if color_unit:
+            info += f" | Color: {color_unit}"
 
         if condicion and condicion.strip().lower() == "demo":
             info += " [DEMO]"
